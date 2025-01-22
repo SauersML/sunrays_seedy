@@ -4,8 +4,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use argon2::Argon2;
-use aes_gcm_siv::aead::{Aead, KeyInit, NewAead};
+use aes_gcm_siv::aead::{Aead, NewAead};
 use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
+use aead::KeyInit;
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
