@@ -110,29 +110,20 @@ async fn main() -> Result<()> {
 
 // =============== Tor Setup ===============
 
+// =============== Tor Setup ===============
+
 /// Start an embedded Tor SOCKS proxy with arti-client on 127.0.0.1:9050.
 async fn start_tor_proxy(port: u16) -> Result<TorClient<PreferredRuntime>> {
-    // 1. Create a TorClientConfig with defaults
-    let tor_cfg = TorClientConfig::default();
+    // 1. Create a TorClientConfig with SOCKS proxy enabled
+    let mut tor_cfg = TorClientConfig::default();
+    tor_cfg.proxy.socks_listen = Some(std::net::SocketAddr::from(([127, 0, 0, 1], port)));
 
     // 2. Bootstrap a TorClient with that config
     let tor_client = TorClient::create_bootstrapped(tor_cfg)
         .await
         .map_err(|e| anyhow!("Failed to bootstrap embedded Tor: {e}"))?;
 
-    // 3. Get the runtime from the client
-    let runtime = tor_client.runtime().clone();
-    
-    // 4. Launch SOCKS proxy using the client's inherent capability
-    let local_addr = format!("127.0.0.1:{}", port).parse()
-        .map_err(|e| anyhow!("Invalid socket address: {e}"))?;
-
-    tokio::spawn(async move {
-        if let Err(e) = runtime.connect_with_socks(local_addr).await {
-            eprintln!("[ERROR] Tor SOCKS proxy failed: {e}");
-        }
-    });
-
+    // The SOCKS proxy is automatically launched when creating the client
     Ok(tor_client)
 }
 
