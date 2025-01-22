@@ -401,10 +401,6 @@ fn secure_file_permissions(path: &str) -> Result<()> {
 
 /// Create a Solana RPC client that uses the local Tor SOCKS proxy
 async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
-    // We must build a custom `reqwest` client with SOCKS5 proxy = 127.0.0.1:9050
-    let socks_proxy = reqwest::Proxy::all("socks5://127.0.0.1:9050")
-        .map_err(|e| anyhow!("Failed to create SOCKS proxy: {e}"))?;
-
     let rpc = RpcClient::new_with_commitment(
         url.to_string(),
         CommitmentConfig::confirmed(),
