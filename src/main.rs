@@ -423,11 +423,11 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
         .build()
         .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
 
-    let sender = RpcClient::new(url);
-    
-    let rpc = sender.clone();
+    let rpc = RpcClient::new_with_commitment(
+        url.to_string(),
+        CommitmentConfig::confirmed(),
+    );
 
-    let sender = HttpSender::new_with_client(url, reqwest_client);
     let cfg = solana_client::rpc_client::RpcClientConfig {
         commitment_config: CommitmentConfig::confirmed(),
         // Default 30s timeouts, can be tweaked in RpcClientConfig
