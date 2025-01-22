@@ -107,7 +107,7 @@ async fn main() -> Result<()> {
 // =============== Tor Setup ===============
 
 /// Start an embedded Tor SOCKS proxy with arti-client on 127.0.0.1:9050.
-async fn start_tor_proxy(port: u16) -> Result<TorClient> {
+async fn start_tor_proxy(port: u16) -> Result<TorClient<tokio::runtime::Runtime>> {
     // 1. Create a TorClientConfig with defaults
     let tor_cfg = TorClientConfig::default();
 
