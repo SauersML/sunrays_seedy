@@ -30,7 +30,6 @@ use arti_client::{
     TorClient,
     config::TorClientConfig,
 };
-use arti::socks::{run_socks_proxy, SocksProxy};
 
 // =============== Constants ===============
 
