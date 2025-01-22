@@ -4,6 +4,7 @@
 //!
 //! No external Tor installation needed.
 
+
 use anyhow::{anyhow, Context, Result};
 use aes_gcm_siv::aead::{Aead, NewAead};
 use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
@@ -11,10 +12,11 @@ use argon2::Argon2;
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
-use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::signature::{Keypair, Signature, Signer};
-use solana_sdk::system_transaction;
+use solana_sdk::transaction::Transaction;
+use solana_sdk::system_instruction;
 use std::fs::{read, write, File};
 use std::io::Write as IoWrite;
 use std::path::Path;
