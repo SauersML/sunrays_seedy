@@ -1,23 +1,19 @@
-//! A Rust program that automatically launches an embedded Tor client via Arti,
-//! generates an encrypted Solana wallet, and provides CLI commands to address,
-//! balance, send, and monitor that wallet over Tor.
-//!
-//! No external Tor installation needed.
-
+//! A Rust program that automatically launches an embedded Tor client via arti-client,
+//! generates an encrypted Solana wallet, and provides CLI commands: generate, address,
+//! balance, send, and monitor. All requests go over Tor. No external Tor install needed.
 
 use anyhow::{anyhow, Context, Result};
-use aes_gcm_siv::aead::{Aead, NewAead};
-use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
 use argon2::Argon2;
+use aes_gcm_siv::aead::{Aead, KeyInit, NewAead};
+use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
-use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
-use solana_sdk::signature::{Keypair, Signature, Signer};
-use solana_sdk::transaction::Transaction;
-use solana_sdk::system_instruction;
-use std::fs::{read, write, File};
+use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::system_transaction;
+use std::fs::{read, write};
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::time::Duration;
@@ -25,9 +21,9 @@ use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
 
-// For embedded Tor (Arti):
-use arti::config::TorClientConfig;
-use arti::TorClient;
+// For embedded Tor (arti-client):
+use arti_client::client::{TorClient, TorClientConfig};
+use arti_client::socks::{run_socks_proxy, SocksProxyConfig};
 
 // =============== Constants ===============
 
@@ -43,12 +39,15 @@ const NONCE_SIZE: usize = 12;
 /// 1 SOL = 1_000_000_000 lamports
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
+// We define a concrete type alias for AES-256-GCM-SIV:
+type Aes256GcmSiv = AesGcmSiv<aes::Aes256>;
+
 // =============== Data Structures ===============
 
 /// Stored inside `wallet.enc`, containing:
 ///   - Argon2 salt
 ///   - AES-GCM-SIV nonce
-///   - Ciphertext
+///   - Ciphertext of the 64-byte Keypair (secret key)
 #[derive(Serialize, Deserialize)]
 struct EncryptedKey {
     salt: Vec<u8>,
@@ -84,12 +83,12 @@ async fn main() -> Result<()> {
     // Parse the subcommand from CLI
     let cmd = parse_command_line();
 
-    // IMPORTANT: Start the embedded Tor client so we can make RPC calls over Tor.
-    // We do this *before* certain commands so that everything consistently uses Tor.
-    let tor_client = start_tor_proxy(9050).await?;
-    println!("\n[INFO] Tor is running. All Solana RPC requests will be routed over Tor.\n");
+    // Start an embedded Tor SOCKS proxy on 127.0.0.1:9050 using arti-client.
+    // We'll do this BEFORE any Solana RPC calls, so they're guaranteed to go over Tor.
+    let _tor_client = start_tor_proxy(9050).await?;
+    println!("\n[INFO] Tor is running on 127.0.0.1:9050. All Solana RPC calls go through it.\n");
 
-    // Depending on the command, perform the requested action.
+    // Dispatch to the requested command
     match cmd {
         Command::Generate => generate_wallet().await,
         Command::Address => show_address().await,
@@ -103,22 +102,27 @@ async fn main() -> Result<()> {
     }
 }
 
-// =============== Tor Setup (Arti) ===============
+// =============== Tor Setup ===============
 
-/// Start an embedded Tor Socks proxy on `127.0.0.1:<port>` using Arti.
-/// This will bootstrap the Tor network in the background.
+/// Start an embedded Tor SOCKS proxy with arti-client on 127.0.0.1:9050.
 async fn start_tor_proxy(port: u16) -> Result<TorClient> {
-    println!("[INFO] Bootstrapping Tor (Arti) client on port {port}...");
-    let cfg = TorClientConfig::default();
-    let tor_client = TorClient::bootstrap(cfg)
-        .await
-        .map_err(|e| anyhow!("Failed to bootstrap Tor: {e}"))?;
+    // 1. Create a TorClientConfig with defaults
+    let tor_cfg = TorClientConfig::default();
 
-    // This spawns a SOCKS proxy in the background
-    tor_client
-        .run_socks_proxy(("127.0.0.1", port), false)
+    // 2. Bootstrap a TorClient with that config
+    let tor_client = TorClient::create_bootstrapped(tor_cfg)
         .await
-        .map_err(|e| anyhow!("Failed to start Tor SOCKS proxy: {e}"))?;
+        .map_err(|e| anyhow!("Failed to bootstrap embedded Tor: {e}"))?;
+
+    // 3. Launch a SOCKS proxy listening on 127.0.0.1:9050 in the background
+    //    so that future requests can route over Tor
+    let local_addr = ("127.0.0.1", port);
+    let socks_cfg = SocksProxyConfig::default();
+    tokio::spawn(async move {
+        if let Err(e) = run_socks_proxy(tor_client.clone(), local_addr, socks_cfg).await {
+            eprintln!("[ERROR] Tor SOCKS proxy failed: {e}");
+        }
+    });
 
     Ok(tor_client)
 }
@@ -164,10 +168,10 @@ fn parse_command_line() -> Command {
 fn print_help() {
     let exe = std::env::args()
         .next()
-        .unwrap_or_else(|| "solana_wallet_tor".to_string());
+        .unwrap_or_else(|| "sunrays_seedy".to_string());
     println!(
         r#"Usage:
-  {exe} generate                Generate a new wallet and store encrypted private key
+  {exe} generate                Generate a new wallet (encrypted) in wallet.enc
   {exe} address                 Show the public address of your wallet
   {exe} balance                 Show the current balance of your wallet
   {exe} send <RECIPIENT> <AMT>  Send <AMT> SOL to <RECIPIENT>
@@ -181,41 +185,35 @@ Examples:
   {exe} send Fg6PaFpo... 0.001
   {exe} monitor
 
-All Solana RPC requests are routed through an embedded Tor client.
-No external Tor installation is needed.
+All Solana RPC requests go over an embedded Tor SOCKS proxy on 127.0.0.1:9050.
+No external Tor install is needed.
 "#
     );
 }
 
 // =============== Commands ===============
 
-/// 1) Generate a new wallet + store in `wallet.enc`, 2) Prompt for passphrase, 3) Encrypt & write
+/// (1) Generate a new Keypair, (2) Prompt passphrase, (3) Encrypt to `wallet.enc`
 async fn generate_wallet() -> Result<()> {
     println!("Generating a new wallet...");
 
-    // Generate new keypair
     let keypair = Keypair::new();
     let pubkey = keypair.pubkey();
     println!("\n[INFO] Your new Solana address: {pubkey}");
 
-    // Prompt passphrase & confirm
     let passphrase = prompt_passphrase_twice()?;
-
-    // Encrypt
     encrypt_keypair(&keypair, &passphrase)?;
-
-    // Attempt to restrict file permissions on Unix (0600).
     secure_file_permissions(ENCRYPTED_WALLET_FILE)?;
 
     println!(
-        "\n[OK] Wallet saved to '{file}'. Keep your passphrase SECRET.\n\
-You can run `address` or `balance` once you have funds.\n",
+        "\n[OK] Wallet saved to '{file}'. Keep your passphrase SECRET.\n",
         file = ENCRYPTED_WALLET_FILE
     );
+    println!("You can run `address` or `balance` once you receive funds.\n");
     Ok(())
 }
 
-/// Show the wallet's public address
+/// Decrypt wallet and show address
 async fn show_address() -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let pubkey = keypair.pubkey();
@@ -223,7 +221,7 @@ async fn show_address() -> Result<()> {
     Ok(())
 }
 
-/// Check the wallet's balance (via Solana RPC over Tor)
+/// Decrypt wallet and show balance
 async fn show_balance() -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let pubkey = keypair.pubkey();
@@ -231,30 +229,24 @@ async fn show_balance() -> Result<()> {
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
     let lamports = rpc_client.get_balance(&pubkey).await?;
     let sol = lamports_to_sol(lamports);
+
     println!("\nBalance of {pubkey}: {sol} SOL\n");
     Ok(())
 }
 
-/// Send the given amount of SOL to the given recipient address
+/// Decrypt wallet, send <amount_sol> to <to> address
 async fn send_sol_cmd(to: &str, amount_sol: f64) -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
 
-    // Convert to lamports
     let lamports = sol_to_lamports(amount_sol);
-
-    // Check recipient pubkey
     let to_pubkey = to
         .parse()
         .map_err(|_| anyhow!("Invalid recipient pubkey: {to}"))?;
 
-    // Get recent blockhash
-    let blockhash = rpc_client.get_latest_blockhash().await?;
+    let recent_blockhash = rpc_client.get_latest_blockhash().await?;
+    let tx = system_transaction::transfer(&keypair, &to_pubkey, lamports, recent_blockhash);
 
-    // Create transaction
-    let tx = system_transaction::transfer(&keypair, &to_pubkey, lamports, blockhash);
-
-    // Send+confirm
     let sig = rpc_client.send_and_confirm_transaction(&tx).await?;
     println!(
         "\n[OK] Sent {amount_sol} SOL to {to}\nTransaction Signature: {sig}\n"
@@ -262,16 +254,15 @@ async fn send_sol_cmd(to: &str, amount_sol: f64) -> Result<()> {
     Ok(())
 }
 
-/// Monitor the wallet's balance in a loop (every 30s)
+/// Decrypt wallet, monitor balance in a loop
 async fn monitor_balance() -> Result<()> {
     let keypair = load_decrypt_keypair()?;
-    let pubkey = keypair.pubkey();
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
+    let pubkey = keypair.pubkey();
 
     println!(
         "\nMonitoring balance of {pubkey} ... Press Ctrl+C to stop.\n"
     );
-
     loop {
         let lamports = rpc_client.get_balance(&pubkey).await?;
         let sol = lamports_to_sol(lamports);
@@ -282,7 +273,7 @@ async fn monitor_balance() -> Result<()> {
 
 // =============== Wallet Encryption/Decryption ===============
 
-/// Prompt for passphrase, confirm it, ensure it is not empty.
+/// Prompt for passphrase twice
 fn prompt_passphrase_twice() -> Result<String> {
     loop {
         print!("Enter a passphrase to encrypt your wallet: ");
@@ -305,47 +296,41 @@ fn prompt_passphrase_twice() -> Result<String> {
     }
 }
 
-/// Encrypt the private key with Argon2 + AES-GCM-SIV, then write to file
+/// Encrypt the private key using Argon2 + AES-256-GCM-SIV
 fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
     let secret_key_bytes = keypair.to_bytes(); // 64 bytes
 
-    // Argon2 salt (16 bytes)
+    // 1) Salt for Argon2
     let mut salt = vec![0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
 
-    // Derive a 32-byte key from passphrase + salt
+    // 2) Derive a 32-byte key
     let derived_key = derive_key_from_passphrase(passphrase, &salt)?;
 
-    // Generate random 12-byte nonce
+    // 3) Generate random 12-byte nonce
     let mut nonce_bytes = vec![0u8; NONCE_SIZE];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    let cipher = AesGcmSiv::new(Key::from_slice(&derived_key));
+    // 4) Encrypt with AES256-GCM-SIV
+    let cipher = Aes256GcmSiv::new(Key::from_slice(&derived_key));
     let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce_bytes),
-            secret_key_bytes.as_ref(),
-        )
+        .encrypt(Nonce::from_slice(&nonce_bytes), secret_key_bytes.as_ref())
         .map_err(|_| anyhow!("Encryption failed"))?;
 
-    // Assemble EncryptedKey structure
     let enc = EncryptedKey {
         salt,
         nonce: nonce_bytes,
         ciphertext,
     };
 
-    // Serialize with bincode
     let serialized = bincode::serialize(&enc)
         .map_err(|e| anyhow!("Serialization error: {e}"))?;
 
-    // Write to file
     write(ENCRYPTED_WALLET_FILE, &serialized)?;
-
     Ok(())
 }
 
-/// Load+decrypt the local `wallet.enc` using user-passphrase from prompt
+/// Decrypt from `wallet.enc` using passphrase from user prompt
 fn load_decrypt_keypair() -> Result<Keypair> {
     if !Path::new(ENCRYPTED_WALLET_FILE).exists() {
         return Err(WalletError::WalletNotFound.into());
@@ -361,20 +346,18 @@ fn load_decrypt_keypair() -> Result<Keypair> {
     decrypt_keypair(&passphrase)
 }
 
-/// Decrypt the Keypair from `wallet.enc` using provided passphrase
+/// Actually decrypt the file
 fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
     let file_data = read(ENCRYPTED_WALLET_FILE)?;
     let enc: EncryptedKey = bincode::deserialize(&file_data)
         .map_err(|_| WalletError::CorruptData)?;
 
-    // Derive key
     let derived_key = derive_key_from_passphrase(passphrase, &enc.salt)?;
-
-    // Decrypt
     if enc.nonce.len() != NONCE_SIZE {
         return Err(WalletError::CorruptData.into());
     }
-    let cipher = AesGcmSiv::new(Key::from_slice(&derived_key));
+
+    let cipher = Aes256GcmSiv::new(Key::from_slice(&derived_key));
     let mut decrypted = cipher
         .decrypt(Nonce::from_slice(&enc.nonce), enc.ciphertext.as_ref())
         .map_err(|_| WalletError::InvalidPassphrase)?;
@@ -384,16 +367,15 @@ fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
         return Err(WalletError::CorruptData.into());
     }
 
-    // Construct Keypair
     let keypair = Keypair::from_bytes(&decrypted)
         .map_err(|_| WalletError::CorruptData)?;
 
-    // Wipe sensitive data from memory
+    // zeroize sensitive data
     decrypted.zeroize();
     Ok(keypair)
 }
 
-/// Derive a 32-byte key from passphrase + salt using Argon2id
+/// Derive a 32-byte key from passphrase + salt
 fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
     let argon2 = Argon2::default();
@@ -401,13 +383,14 @@ fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]>
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
         .map_err(|e| anyhow!("Argon2 derivation failed: {e}"))?;
+
     Ok(key)
 }
 
 // =============== File Security ===============
 
-/// Attempt to restrict file permissions on Unix (chmod 600).
-/// Non-Unix systems will ignore this.
+/// Restrict file permissions on Unix (chmod 600).
+#[allow(unused_variables)]
 fn secure_file_permissions(path: &str) -> Result<()> {
     #[cfg(unix)]
     {
@@ -422,25 +405,28 @@ fn secure_file_permissions(path: &str) -> Result<()> {
 
 // =============== Solana RPC over Tor ===============
 
-/// Create a Solana RPC client that talks over our local Tor SOCKS proxy at 127.0.0.1:<port>
+/// Create a Solana RPC client that uses the local Tor SOCKS proxy
 async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
-    // Build a custom reqwest client that uses the local Tor SOCKS5 proxy
-    let socks_url = "socks5://127.0.0.1:9050";
-    let proxy = reqwest::Proxy::all(socks_url)
+    // We must build a custom `reqwest` client with SOCKS5 proxy = 127.0.0.1:9050
+    let socks_proxy = reqwest::Proxy::all("socks5://127.0.0.1:9050")
         .map_err(|e| anyhow!("Failed to create SOCKS proxy: {e}"))?;
+
     let reqwest_client = reqwest::Client::builder()
-        .proxy(proxy)
+        .proxy(socks_proxy)
         .build()
         .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
 
-    // The nonblocking Solana client can be constructed with a custom HttpSender under the hood.
-    let rpc = RpcClient::new_with_commitment_and_options(
-        url.to_string(),
-        CommitmentConfig::confirmed(),
-        solana_client::nonblocking::rpc_client::RpcClientOptions {
-            client: Some(reqwest_client),
-        },
-    );
+    use solana_client::http_sender::HttpSender;
+    use std::sync::Arc;
+
+    let sender = HttpSender::new_with_client(url, reqwest_client);
+    let cfg = solana_client::rpc_client::RpcClientConfig {
+        commitment: CommitmentConfig::confirmed(),
+        // Default 30s timeouts, can be tweaked in RpcClientConfig
+        ..solana_client::rpc_client::RpcClientConfig::default()
+    };
+
+    let rpc = RpcClient::new_sender(Arc::new(sender), cfg);
     Ok(rpc)
 }
 
