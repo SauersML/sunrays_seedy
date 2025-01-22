@@ -24,7 +24,7 @@ use zeroize::Zeroize;
 use aes_gcm::aes::Aes256;
 
 // For embedded Tor (arti-client):
-use arti_client::{TorClient, TorClientConfig};
+use arti_client::TorClient;
 use arti_client::config::TorClientConfig;
 
 // =============== Constants ===============
