@@ -1,66 +1,60 @@
-use anyhow::{anyhow, Result};
-use aes_gcm_siv::{
-    aead::{generic_array::GenericArray, Aead, KeyInit},
-    AesGcmSiv, Key, Nonce,
-};
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+//! A Rust program that automatically launches an embedded Tor client via Arti,
+//! generates an encrypted Solana wallet, and provides CLI commands to address,
+//! balance, send, and monitor that wallet over Tor.
+//!
+//! No external Tor installation needed.
+
+use anyhow::{anyhow, Context, Result};
+use aes_gcm_siv::aead::{Aead, NewAead};
+use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
+use argon2::Argon2;
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
-use solana_client::{
-    rpc_client::RpcClient,
-    rpc_request::RpcRequest,
-    rpc_sender::HttpSender,
-};
-use solana_sdk::{
-    commitment_config::CommitmentConfig,
-    signature::{Keypair, Signature, Signer},
-    system_transaction,
-};
-use std::{
-    fs::{read, write},
-    io::Write,
-    path::PathBuf,
-    str::FromStr,
-    time::Duration,
-};
-use tokio::time::sleep;
+use solana_client::nonblocking::rpc_client::RpcClient;
+use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::signature::{Keypair, Signature, Signer};
+use solana_sdk::system_transaction;
+use std::fs::{read, write, File};
+use std::io::Write as IoWrite;
+use std::path::Path;
+use std::time::Duration;
 use thiserror::Error;
+use tokio::time::sleep;
+use zeroize::Zeroize;
 
-/// Default RPC endpoint (Mainnet Beta).
-/// You may change this to devnet or your own node as desired.
+// For embedded Tor (Arti):
+use arti::config::TorClientConfig;
+use arti::TorClient;
+
+// =============== Constants ===============
+
+/// Default Solana mainnet RPC endpoint.
 const SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
-/// Filename to store your encrypted wallet (private key).
+/// The file where we store our Argon2-encrypted private key.
 const ENCRYPTED_WALLET_FILE: &str = "wallet.enc";
 
-/// AES-GCM-SIV Nonce size in bytes (96 bits).
+/// AES-GCM-SIV uses a 96-bit (12-byte) nonce.
 const NONCE_SIZE: usize = 12;
 
-/// We will store this struct (serialized) inside the encrypted file.
+/// 1 SOL = 1_000_000_000 lamports
+const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
+
+// =============== Data Structures ===============
+
+/// Stored inside `wallet.enc`, containing:
+///   - Argon2 salt
+///   - AES-GCM-SIV nonce
+///   - Ciphertext
 #[derive(Serialize, Deserialize)]
 struct EncryptedKey {
-    /// Random salt used for Argon2 key derivation.
     salt: Vec<u8>,
-    /// The nonce used for AES-GCM-SIV encryption.
     nonce: Vec<u8>,
-    /// Actual ciphertext of the private key bytes.
     ciphertext: Vec<u8>,
 }
 
-/// Errors that might occur in our wallet operations.
-#[derive(Debug, Error)]
-enum WalletError {
-    #[error("No wallet found. Have you run `generate`?")]
-    WalletNotFound,
-    #[error("Invalid encryption data in the wallet file.")]
-    CorruptData,
-    #[error("Invalid passphrase.")]
-    InvalidPassphrase,
-}
-
-/// Command-line subcommands
-#[derive(Debug)]
+/// Possible CLI commands
 enum Command {
     Generate,
     Address,
@@ -70,57 +64,67 @@ enum Command {
     Help,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Parse command line
-    let cmd = parse_command_line();
-
-    match cmd {
-        Command::Generate => {
-            generate_wallet().await?;
-        }
-        Command::Address => {
-            let keypair = load_decrypt_keypair()?;
-            println!("Your Solana address (public key) is:\n{}", keypair.pubkey());
-        }
-        Command::Balance => {
-            let keypair = load_decrypt_keypair()?;
-            let client = create_tor_rpc_client(SOLANA_RPC_URL)?;
-            let balance_sol = get_balance_sol(&client, &keypair.pubkey())?;
-            println!("Balance of {} is {} SOL", keypair.pubkey(), balance_sol);
-        }
-        Command::Send { to, amount } => {
-            let keypair = load_decrypt_keypair()?;
-            let client = create_tor_rpc_client(SOLANA_RPC_URL)?;
-            let sig = send_sol(&client, &keypair, &to, amount)?;
-            println!("Sent {} SOL to {} in transaction {}", amount, to, sig);
-        }
-        Command::Monitor => {
-            // Repeatedly fetch balance and display it
-            // This is a simple example that checks balance every 30 seconds.
-            let keypair = load_decrypt_keypair()?;
-            let client = create_tor_rpc_client(SOLANA_RPC_URL)?;
-            let pubkey = keypair.pubkey();
-
-            println!("Monitoring balance for {}\n(Ctrl+C to stop)...", pubkey);
-            loop {
-                let balance_sol = get_balance_sol(&client, &pubkey)?;
-                println!("Balance: {} SOL", balance_sol);
-                sleep(Duration::from_secs(30)).await;
-            }
-        }
-        Command::Help => {
-            print_help();
-        }
-    }
-
-    Ok(())
+/// Custom wallet-related errors
+#[derive(Debug, Error)]
+enum WalletError {
+    #[error("No wallet file found. Run `generate` first.")]
+    WalletNotFound,
+    #[error("Wallet data is corrupted.")]
+    CorruptData,
+    #[error("Invalid passphrase.")]
+    InvalidPassphrase,
 }
 
-/// Parse minimal command line arguments into our Command enum.
+// =============== Main Entry ===============
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    // Parse the subcommand from CLI
+    let cmd = parse_command_line();
+
+    // IMPORTANT: Start the embedded Tor client so we can make RPC calls over Tor.
+    // We do this *before* certain commands so that everything consistently uses Tor.
+    let tor_client = start_tor_proxy(9050).await?;
+    println!("\n[INFO] Tor is running. All Solana RPC requests will be routed over Tor.\n");
+
+    // Depending on the command, perform the requested action.
+    match cmd {
+        Command::Generate => generate_wallet().await,
+        Command::Address => show_address().await,
+        Command::Balance => show_balance().await,
+        Command::Send { to, amount } => send_sol_cmd(&to, amount).await,
+        Command::Monitor => monitor_balance().await,
+        Command::Help => {
+            print_help();
+            Ok(())
+        }
+    }
+}
+
+// =============== Tor Setup (Arti) ===============
+
+/// Start an embedded Tor Socks proxy on `127.0.0.1:<port>` using Arti.
+/// This will bootstrap the Tor network in the background.
+async fn start_tor_proxy(port: u16) -> Result<TorClient> {
+    println!("[INFO] Bootstrapping Tor (Arti) client on port {port}...");
+    let cfg = TorClientConfig::default();
+    let tor_client = TorClient::bootstrap(cfg)
+        .await
+        .map_err(|e| anyhow!("Failed to bootstrap Tor: {e}"))?;
+
+    // This spawns a SOCKS proxy in the background
+    tor_client
+        .run_socks_proxy(("127.0.0.1", port), false)
+        .await
+        .map_err(|e| anyhow!("Failed to start Tor SOCKS proxy: {e}"))?;
+
+    Ok(tor_client)
+}
+
+// =============== CLI Parsing ===============
+
 fn parse_command_line() -> Command {
     let args: Vec<String> = std::env::args().collect();
-
     if args.len() < 2 {
         print_help();
         std::process::exit(1);
@@ -137,10 +141,10 @@ fn parse_command_line() -> Command {
             }
             let to = args[2].clone();
             let amount_str = args[3].clone();
-            let amount = match f64::from_str(&amount_str) {
+            let amount = match amount_str.parse::<f64>() {
                 Ok(a) => a,
                 Err(_) => {
-                    eprintln!("Invalid amount: {}", amount_str);
+                    eprintln!("Invalid amount: {amount_str}");
                     std::process::exit(1);
                 }
             };
@@ -155,16 +159,17 @@ fn parse_command_line() -> Command {
     }
 }
 
-/// Print usage instructions
 fn print_help() {
-    let exe = std::env::args().next().unwrap_or("solana_wallet_tor".into());
+    let exe = std::env::args()
+        .next()
+        .unwrap_or_else(|| "solana_wallet_tor".to_string());
     println!(
         r#"Usage:
   {exe} generate                Generate a new wallet and store encrypted private key
   {exe} address                 Show the public address of your wallet
   {exe} balance                 Show the current balance of your wallet
   {exe} send <RECIPIENT> <AMT>  Send <AMT> SOL to <RECIPIENT>
-  {exe} monitor                 Continuously monitor wallet balance
+  {exe} monitor                 Continuously monitor wallet balance (Ctrl+C to stop)
   {exe} help                    Show this help message
 
 Examples:
@@ -174,203 +179,275 @@ Examples:
   {exe} send Fg6PaFpo... 0.001
   {exe} monitor
 
-By default, this connects to {url} via Tor at 127.0.0.1:9050.
-"#,
-        exe = exe,
-        url = SOLANA_RPC_URL,
+All Solana RPC requests are routed through an embedded Tor client.
+No external Tor installation is needed.
+"#
     );
 }
 
-/// Creates a new wallet (Keypair), encrypts it with passphrase, and writes to `wallet.enc`.
+// =============== Commands ===============
+
+/// 1) Generate a new wallet + store in `wallet.enc`, 2) Prompt for passphrase, 3) Encrypt & write
 async fn generate_wallet() -> Result<()> {
+    println!("Generating a new wallet...");
+
     // Generate new keypair
     let keypair = Keypair::new();
     let pubkey = keypair.pubkey();
+    println!("\n[INFO] Your new Solana address: {pubkey}");
 
-    println!("Generating new wallet...");
-    println!("Your new public address is: {}", pubkey);
-    println!("\nIMPORTANT: Store your passphrase in a safe place. If you lose it, you lose access.");
+    // Prompt passphrase & confirm
+    let passphrase = prompt_passphrase_twice()?;
 
-    // Prompt for passphrase
-    let passphrase = loop {
-        print!("Enter a passphrase to encrypt your new wallet file: ");
-        std::io::stdout().flush()?;
-        let p1 = read_password().unwrap_or_default();
-
-        print!("Confirm passphrase: ");
-        std::io::stdout().flush()?;
-        let p2 = read_password().unwrap_or_default();
-
-        if p1.is_empty() {
-            println!("Passphrase cannot be empty. Try again.\n");
-            continue;
-        }
-
-        if p1 == p2 {
-            break p1;
-        } else {
-            println!("Passphrases do not match. Try again.\n");
-        }
-    };
-
-    // Encrypt and write to file
+    // Encrypt
     encrypt_keypair(&keypair, &passphrase)?;
 
-    println!("\nWallet successfully generated and encrypted to '{}'.", ENCRYPTED_WALLET_FILE);
-    println!("You can run `address` to see your public address at any time.\n");
+    // Attempt to restrict file permissions on Unix (0600).
+    secure_file_permissions(ENCRYPTED_WALLET_FILE)?;
+
+    println!(
+        "\n[OK] Wallet saved to '{file}'. Keep your passphrase SECRET.\n\
+You can run `address` or `balance` once you have funds.\n",
+        file = ENCRYPTED_WALLET_FILE
+    );
     Ok(())
 }
 
-/// Load & decrypt the stored wallet file using passphrase from user prompt.
-fn load_decrypt_keypair() -> Result<Keypair> {
-    if !std::path::Path::new(ENCRYPTED_WALLET_FILE).exists() {
-        return Err(WalletError::WalletNotFound.into());
-    }
-
-    println!("Enter passphrase to decrypt your wallet: ");
-    std::io::stdout().flush()?;
-    let passphrase = read_password().unwrap_or_default();
-    if passphrase.is_empty() {
-        return Err(anyhow!("Passphrase cannot be empty."));
-    }
-
-    let keypair = decrypt_keypair(&passphrase)?;
-    Ok(keypair)
+/// Show the wallet's public address
+async fn show_address() -> Result<()> {
+    let keypair = load_decrypt_keypair()?;
+    let pubkey = keypair.pubkey();
+    println!("\nYour Solana address (public key): {pubkey}\n");
+    Ok(())
 }
 
-/// Encrypt the given Keypair to `wallet.enc` using the provided passphrase.
-fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
-    let secret_key = keypair.to_bytes(); // 64 bytes
+/// Check the wallet's balance (via Solana RPC over Tor)
+async fn show_balance() -> Result<()> {
+    let keypair = load_decrypt_keypair()?;
+    let pubkey = keypair.pubkey();
 
-    // Generate random salt for Argon2
+    let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
+    let lamports = rpc_client.get_balance(&pubkey).await?;
+    let sol = lamports_to_sol(lamports);
+    println!("\nBalance of {pubkey}: {sol} SOL\n");
+    Ok(())
+}
+
+/// Send the given amount of SOL to the given recipient address
+async fn send_sol_cmd(to: &str, amount_sol: f64) -> Result<()> {
+    let keypair = load_decrypt_keypair()?;
+    let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
+
+    // Convert to lamports
+    let lamports = sol_to_lamports(amount_sol);
+
+    // Check recipient pubkey
+    let to_pubkey = to
+        .parse()
+        .map_err(|_| anyhow!("Invalid recipient pubkey: {to}"))?;
+
+    // Get recent blockhash
+    let blockhash = rpc_client.get_latest_blockhash().await?;
+
+    // Create transaction
+    let tx = system_transaction::transfer(&keypair, &to_pubkey, lamports, blockhash);
+
+    // Send+confirm
+    let sig = rpc_client.send_and_confirm_transaction(&tx).await?;
+    println!(
+        "\n[OK] Sent {amount_sol} SOL to {to}\nTransaction Signature: {sig}\n"
+    );
+    Ok(())
+}
+
+/// Monitor the wallet's balance in a loop (every 30s)
+async fn monitor_balance() -> Result<()> {
+    let keypair = load_decrypt_keypair()?;
+    let pubkey = keypair.pubkey();
+    let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
+
+    println!(
+        "\nMonitoring balance of {pubkey} ... Press Ctrl+C to stop.\n"
+    );
+
+    loop {
+        let lamports = rpc_client.get_balance(&pubkey).await?;
+        let sol = lamports_to_sol(lamports);
+        println!("Balance: {sol} SOL");
+        sleep(Duration::from_secs(30)).await;
+    }
+}
+
+// =============== Wallet Encryption/Decryption ===============
+
+/// Prompt for passphrase, confirm it, ensure it is not empty.
+fn prompt_passphrase_twice() -> Result<String> {
+    loop {
+        print!("Enter a passphrase to encrypt your wallet: ");
+        std::io::stdout().flush()?;
+        let pass1 = read_password().context("Failed to read passphrase")?;
+
+        print!("Confirm passphrase: ");
+        std::io::stdout().flush()?;
+        let pass2 = read_password().context("Failed to read passphrase")?;
+
+        if pass1.is_empty() {
+            println!("Passphrase cannot be empty. Try again.\n");
+            continue;
+        }
+        if pass1 == pass2 {
+            return Ok(pass1);
+        } else {
+            println!("Passphrases do not match. Try again.\n");
+        }
+    }
+}
+
+/// Encrypt the private key with Argon2 + AES-GCM-SIV, then write to file
+fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
+    let secret_key_bytes = keypair.to_bytes(); // 64 bytes
+
+    // Argon2 salt (16 bytes)
     let mut salt = vec![0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
 
-    // Derive encryption key from passphrase
+    // Derive a 32-byte key from passphrase + salt
     let derived_key = derive_key_from_passphrase(passphrase, &salt)?;
 
-    // Now encrypt with AES-GCM-SIV
+    // Generate random 12-byte nonce
     let mut nonce_bytes = vec![0u8; NONCE_SIZE];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
 
-    let key = Key::from_slice(&derived_key);
-    let cipher = AesGcmSiv::new(key);
-
+    let cipher = AesGcmSiv::new(Key::from_slice(&derived_key));
     let ciphertext = cipher
-        .encrypt(nonce, secret_key.as_ref())
+        .encrypt(
+            Nonce::from_slice(&nonce_bytes),
+            secret_key_bytes.as_ref(),
+        )
         .map_err(|_| anyhow!("Encryption failed"))?;
 
-    let enc_struct = EncryptedKey {
+    // Assemble EncryptedKey structure
+    let enc = EncryptedKey {
         salt,
         nonce: nonce_bytes,
         ciphertext,
     };
 
-    let serialized = bincode::serialize(&enc_struct)?;
-    write(ENCRYPTED_WALLET_FILE, serialized)?;
+    // Serialize with bincode
+    let serialized = bincode::serialize(&enc)
+        .map_err(|e| anyhow!("Serialization error: {e}"))?;
+
+    // Write to file
+    write(ENCRYPTED_WALLET_FILE, &serialized)?;
 
     Ok(())
 }
 
-/// Decrypt the Keypair from `wallet.enc` using provided passphrase.
+/// Load+decrypt the local `wallet.enc` using user-passphrase from prompt
+fn load_decrypt_keypair() -> Result<Keypair> {
+    if !Path::new(ENCRYPTED_WALLET_FILE).exists() {
+        return Err(WalletError::WalletNotFound.into());
+    }
+
+    println!("Enter wallet passphrase:");
+    std::io::stdout().flush()?;
+    let passphrase = read_password().context("Failed to read passphrase")?;
+    if passphrase.is_empty() {
+        return Err(anyhow!("Passphrase cannot be empty."));
+    }
+
+    decrypt_keypair(&passphrase)
+}
+
+/// Decrypt the Keypair from `wallet.enc` using provided passphrase
 fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
-    let data = read(ENCRYPTED_WALLET_FILE)?;
-    let enc: EncryptedKey = bincode::deserialize(&data)
+    let file_data = read(ENCRYPTED_WALLET_FILE)?;
+    let enc: EncryptedKey = bincode::deserialize(&file_data)
         .map_err(|_| WalletError::CorruptData)?;
 
+    // Derive key
     let derived_key = derive_key_from_passphrase(passphrase, &enc.salt)?;
 
-    // AES-GCM-SIV
+    // Decrypt
     if enc.nonce.len() != NONCE_SIZE {
         return Err(WalletError::CorruptData.into());
     }
-    let key = Key::from_slice(&derived_key);
-    let cipher = AesGcmSiv::new(key);
-    let nonce = Nonce::from_slice(&enc.nonce);
-
-    let decrypted = cipher
-        .decrypt(nonce, enc.ciphertext.as_ref())
+    let cipher = AesGcmSiv::new(Key::from_slice(&derived_key));
+    let mut decrypted = cipher
+        .decrypt(Nonce::from_slice(&enc.nonce), enc.ciphertext.as_ref())
         .map_err(|_| WalletError::InvalidPassphrase)?;
 
     if decrypted.len() != 64 {
+        decrypted.zeroize();
         return Err(WalletError::CorruptData.into());
     }
 
-    // Reconstruct Keypair from 64 bytes
+    // Construct Keypair
     let keypair = Keypair::from_bytes(&decrypted)
         .map_err(|_| WalletError::CorruptData)?;
 
+    // Wipe sensitive data from memory
+    decrypted.zeroize();
     Ok(keypair)
 }
 
-/// Derive a 32-byte key from passphrase + salt using Argon2.
-/// This is a minimal example; maybe tune Argon2 parameters.
-fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<Vec<u8>> {
-    // We will produce a 32-byte key
-    let mut key = vec![0u8; 32];
-
-    // Argon2id recommended for password hashing
+/// Derive a 32-byte key from passphrase + salt using Argon2id
+fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
+    let mut key = [0u8; 32];
     let argon2 = Argon2::default();
 
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|_| anyhow!("Argon2 key derivation failed"))?;
-
+        .map_err(|e| anyhow!("Argon2 derivation failed: {e}"))?;
     Ok(key)
 }
 
-/// Create a Solana RpcClient that routes requests via Tor on 127.0.0.1:9050.
-fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
-    let proxy = reqwest::Proxy::all("socks5://127.0.0.1:9050")?;
+// =============== File Security ===============
+
+/// Attempt to restrict file permissions on Unix (chmod 600).
+/// Non-Unix systems will ignore this.
+fn secure_file_permissions(path: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(path)?;
+        let mut perms = metadata.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+// =============== Solana RPC over Tor ===============
+
+/// Create a Solana RPC client that talks over our local Tor SOCKS proxy at 127.0.0.1:<port>
+async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
+    // Build a custom reqwest client that uses the local Tor SOCKS5 proxy
+    let socks_url = "socks5://127.0.0.1:9050";
+    let proxy = reqwest::Proxy::all(socks_url)
+        .map_err(|e| anyhow!("Failed to create SOCKS proxy: {e}"))?;
     let reqwest_client = reqwest::Client::builder()
         .proxy(proxy)
-        .build()?;
+        .build()
+        .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
 
-    let sender = HttpSender::new_with_client(reqwest_client);
-    let rpc_client = RpcClient::new_sender(
-        sender,
+    // The nonblocking Solana client can be constructed with a custom HttpSender under the hood.
+    let rpc = RpcClient::new_with_commitment_and_options(
         url.to_string(),
         CommitmentConfig::confirmed(),
+        solana_client::nonblocking::rpc_client::RpcClientOptions {
+            client: Some(reqwest_client),
+        },
     );
-    Ok(rpc_client)
+    Ok(rpc)
 }
 
-/// Get the balance (in SOL) for the given public key.
-fn get_balance_sol(client: &RpcClient, pubkey: &solana_sdk::pubkey::Pubkey) -> Result<f64> {
-    let lamports = client.get_balance(pubkey)?;
-    let sol = lamports_to_sol(lamports);
-    Ok(sol)
-}
+// =============== Helper Conversions ===============
 
-/// Send the given amount of SOL from `from_keypair` to address `to_pubkey_str`.
-fn send_sol(
-    client: &RpcClient,
-    from_keypair: &Keypair,
-    to_pubkey_str: &str,
-    amount_sol: f64,
-) -> Result<Signature> {
-    let to_pubkey = solana_sdk::pubkey::Pubkey::from_str(to_pubkey_str)
-        .map_err(|_| anyhow!("Invalid recipient pubkey"))?;
-
-    // Convert SOL to lamports
-    let lamports = sol_to_lamports(amount_sol);
-
-    // Build transaction
-    let recent_blockhash = client.get_latest_blockhash()?;
-    let tx = system_transaction::transfer(from_keypair, &to_pubkey, lamports, recent_blockhash);
-
-    // Send transaction
-    let signature = client.send_and_confirm_transaction(&tx)?;
-    Ok(signature)
-}
-
-/// Convert lamports to SOL (1 SOL = 1_000_000_000 lamports)
 fn lamports_to_sol(lamports: u64) -> f64 {
-    lamports as f64 / 1_000_000_000.0
+    lamports as f64 / LAMPORTS_PER_SOL
 }
 
-/// Convert SOL to lamports
 fn sol_to_lamports(sol: f64) -> u64 {
-    (sol * 1_000_000_000.0) as u64
+    (sol * LAMPORTS_PER_SOL).round() as u64
 }
