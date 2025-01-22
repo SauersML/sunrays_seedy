@@ -20,6 +20,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
+use aes_gcm::aes::Aes256;
 
 // For embedded Tor (arti-client):
 use arti_client::client::{TorClient, TorClientConfig};
