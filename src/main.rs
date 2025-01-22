@@ -110,33 +110,20 @@ async fn main() -> Result<()> {
 
 // =============== Tor Setup ===============
 
-/// Start an embedded Tor SOCKS proxy with arti-client on 127.0.0.1:9050.
-async fn start_tor_proxy(port: u16) -> Result<TorClient<PreferredRuntime>> {
-    // 1. Create a TorClientConfig with defaults
-    let tor_cfg = TorClientConfig::default();
-
-    // 2. Bootstrap a TorClient with that config
-    let tor_client = TorClient::create_bootstrapped(tor_cfg)
-        .await
-        .map_err(|e| anyhow!("Failed to bootstrap embedded Tor: {e}"))?;
-
-    // 3. Get the runtime from the client
-    let runtime = tor_client.runtime().clone();
+/// Start an embedded Tor SOCKS proxy by executing arti binary
+async fn start_tor_proxy(port: u16) -> Result<()> {
+    use tokio::process::Command;
     
-    // 4. Launch SOCKS proxy using arti-client's dedicated SOCKS API
-    let local_addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    
-    tokio::spawn(async move {
-        arti_client::socks::run_socks_proxy(
-            runtime,
-            tor_client,
-            local_addr,
-            None // No RPC data needed
-        ).await
-        .unwrap_or_else(|e| eprintln!("SOCKS proxy failed: {e}"));
-    });
+    // Launch arti proxy in the background
+    Command::new("arti")
+        .args(["proxy", "--log-level", "debug", "--port", &port.to_string()])
+        .spawn()
+        .map_err(|e| anyhow!("Failed to start arti proxy: {}. Is arti installed?", e))?;
 
-    Ok(tor_client)
+    // Wait briefly to ensure proxy starts
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    
+    Ok(())
 }
 
 // =============== CLI Parsing ===============
