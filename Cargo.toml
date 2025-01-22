@@ -29,5 +29,5 @@ solana-sdk = "2.1.10"
 solana-account-decoder = "2.1.10"
 
 # Arti for embedded Tor
-arti = { version = "1.3", features = ["socks"] }
+arti = { version = "1.3.2" }
 arti-client = { version = "0.26.0", features = ["tokio", "native-tls"] }
