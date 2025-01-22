@@ -421,7 +421,7 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
 
     let sender = HttpSender::new_with_client(url, reqwest_client);
     let cfg = solana_client::rpc_client::RpcClientConfig {
-        commitment: CommitmentConfig::confirmed(),
+        commitment_config: CommitmentConfig::confirmed(),
         // Default 30s timeouts, can be tweaked in RpcClientConfig
         ..solana_client::rpc_client::RpcClientConfig::default()
     };
