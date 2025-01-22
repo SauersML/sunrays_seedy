@@ -19,6 +19,7 @@ use std::fs::{read, write};
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::time::Duration;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
@@ -419,8 +420,9 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
         .build()
         .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
 
-    use solana_client::nonblocking::http_sender::HttpSender;
-    use std::sync::Arc;
+    let sender = RpcClient::new(url);
+    
+    let rpc = sender.clone();
 
     let sender = HttpSender::new_with_client(url, reqwest_client);
     let cfg = solana_client::rpc_client::RpcClientConfig {
