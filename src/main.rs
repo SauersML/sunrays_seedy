@@ -5,9 +5,8 @@
 use anyhow::{anyhow, Context, Result};
 use argon2::Argon2;
 use aes_gcm::{
-    aead::{Aead, KeyInit},
-    Aes256Gcm,
-    Key, Nonce,
+    aead::{Aead, KeyInit, generic_array::GenericArray},
+    Aes256Gcm, Nonce,
 };
 use rand::RngCore;
 use rpassword::read_password;
