@@ -44,7 +44,7 @@ const NONCE_SIZE: usize = 12;
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
 // We define a concrete type alias for AES-256-GCM-SIV:
-type Aes256GcmSiv = AesGcmSiv<Aes256>;
+type Aes256GcmSiv = Aes256Gcm;
 
 // =============== Data Structures ===============
 
