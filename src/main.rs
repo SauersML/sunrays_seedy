@@ -124,9 +124,9 @@ async fn start_tor_proxy(port: u16) -> Result<TorClient<PreferredRuntime>> {
     // 3. Launch a SOCKS proxy listening on 127.0.0.1:9050 in the background
     //    so that future requests can route over Tor
     let local_addr = ("127.0.0.1", port);
-    let socks_cfg = SocksProxyConfig::default();
+    let socks = SocksProxy::new();
     tokio::spawn(async move {
-        if let Err(e) = run_socks_proxy(tor_client.clone(), local_addr, socks_cfg).await {
+        if let Err(e) = run_socks_proxy(socks, tor_client.clone(), local_addr).await {
             eprintln!("[ERROR] Tor SOCKS proxy failed: {e}");
         }
     });
