@@ -5,7 +5,7 @@
 use anyhow::{anyhow, Context, Result};
 use argon2::Argon2;
 use aes_gcm::{
-    aead::{Aead, KeyInit, generic_array::GenericArray},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use rand::RngCore;
