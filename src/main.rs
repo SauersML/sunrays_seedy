@@ -23,7 +23,7 @@ use zeroize::Zeroize;
 
 // For embedded Tor (arti-client):
 use arti_client::client::{TorClient, TorClientConfig};
-use arti_client::socks::{run_socks_proxy, SocksProxyConfig};
+use arti_client::config::socks::{run_socks_proxy, SocksProxyConfig};
 
 // =============== Constants ===============
 
