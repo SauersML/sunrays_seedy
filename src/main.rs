@@ -120,12 +120,15 @@ async fn start_tor_proxy(port: u16) -> Result<TorClient<PreferredRuntime>> {
         .await
         .map_err(|e| anyhow!("Failed to bootstrap embedded Tor: {e}"))?;
 
-    // 3. Launch a SOCKS proxy listening on 127.0.0.1:9050 in the background
-    //    so that future requests can route over Tor
-    let local_addr = ("127.0.0.1", port);
-    let socks = SocksProxy::new();
+    // 3. Get the runtime from the client
+    let runtime = tor_client.runtime().clone();
+    
+    // 4. Launch SOCKS proxy using the client's inherent capability
+    let local_addr = format!("127.0.0.1:{}", port).parse()
+        .map_err(|e| anyhow!("Invalid socket address: {e}"))?;
+
     tokio::spawn(async move {
-        if let Err(e) = run_socks_proxy(socks, tor_client.clone(), local_addr).await {
+        if let Err(e) = runtime.connect_with_socks(local_addr).await {
             eprintln!("[ERROR] Tor SOCKS proxy failed: {e}");
         }
     });
