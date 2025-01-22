@@ -4,9 +4,11 @@
 
 use anyhow::{anyhow, Context, Result};
 use argon2::Argon2;
-use aes_gcm_siv::aead::{Aead, NewAead};
-use aes_gcm_siv::{AesGcmSiv, Key, Nonce};
-use aead::KeyInit;
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm,
+    Key, Nonce,
+};
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
@@ -21,7 +23,6 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
-use aes_gcm::aes::Aes256;
 use tor_rtcompat::PreferredRuntime;
 
 // For embedded Tor (arti-client):
