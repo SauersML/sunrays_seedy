@@ -419,7 +419,7 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
         .build()
         .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
 
-    use solana_client::http_sender::HttpSender;
+    use solana_client::nonblocking::http_sender::HttpSender;
     use std::sync::Arc;
 
     let sender = HttpSender::new_with_client(url, reqwest_client);
