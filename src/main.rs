@@ -319,7 +319,7 @@ fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
     // 4) Encrypt with AES256-GCM-SIV
-    let cipher = Aes256GcmSiv::new(Key::from_slice(&derived_key));
+    let cipher = Aes256GcmSiv::new_from_slice(&derived_key).map_err(|_| anyhow!("Invalid key length"))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), secret_key_bytes.as_ref())
         .map_err(|_| anyhow!("Encryption failed"))?;
@@ -364,7 +364,7 @@ fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
         return Err(WalletError::CorruptData.into());
     }
 
-    let cipher = Aes256GcmSiv::new(Key::from_slice(&derived_key));
+    let cipher = Aes256GcmSiv::new_from_slice(&derived_key).map_err(|_| anyhow!("Invalid key length"))?;
     let mut decrypted = cipher
         .decrypt(Nonce::from_slice(&enc.nonce), enc.ciphertext.as_ref())
         .map_err(|_| WalletError::InvalidPassphrase)?;
