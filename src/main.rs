@@ -22,6 +22,7 @@ use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
 use aes_gcm::aes::Aes256;
+use tor_rtcompat::PreferredRuntime;
 
 // For embedded Tor (arti-client):
 use arti_client::TorClient;
@@ -107,7 +108,7 @@ async fn main() -> Result<()> {
 // =============== Tor Setup ===============
 
 /// Start an embedded Tor SOCKS proxy with arti-client on 127.0.0.1:9050.
-async fn start_tor_proxy(port: u16) -> Result<TorClient<tokio::runtime::Runtime>> {
+async fn start_tor_proxy(port: u16) -> Result<TorClient<PreferredRuntime>> {
     // 1. Create a TorClientConfig with defaults
     let tor_cfg = TorClientConfig::default();
 
