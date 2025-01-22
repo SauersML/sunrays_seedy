@@ -23,9 +23,6 @@ use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
 
-// For embedded Tor (arti-client):
-use arti_client;
-
 // =============== Constants ===============
 
 /// Default Solana mainnet RPC endpoint.
