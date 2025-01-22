@@ -19,9 +19,9 @@ zeroize = "1.8"
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros"] }
 
 # Solana (nonblocking) client/libraries
-solana-client = { version = "1.18.26", features = ["nonblocking"] }
-solana-sdk = "1.18.26"
-solana-account-decoder = "1.18.26"
+solana-client = { version = "2.1.10" }
+solana-sdk = "2.1.10"
+solana-account-decoder = "2.1.10"
 
 # Arti for embedded Tor
 arti = "1.3"
