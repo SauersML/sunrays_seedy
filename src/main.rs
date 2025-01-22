@@ -25,11 +25,8 @@ use zeroize::Zeroize;
 use tor_rtcompat::PreferredRuntime;
 
 // For embedded Tor (arti-client):
-use arti_client::{
-    TorClient,
-    config::TorClientConfig,
-    socks::{run_socks_proxy, SocksProxyConfig},
-};
+use arti_client::{TorClient, config::TorClientConfig};
+use arti_client::config::proxy::{run_socks_proxy, SocksProxyConfig};
 
 // =============== Constants ===============
 
