@@ -19,17 +19,12 @@ use std::fs::{read, write};
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::time::Duration;
-use std::sync::Arc;
 use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
-use tor_rtcompat::PreferredRuntime;
 
 // For embedded Tor (arti-client):
-use arti_client::{
-    TorClient,
-    config::TorClientConfig,
-};
+use arti_client;
 
 // =============== Constants ===============
 
@@ -409,16 +404,6 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
     // We must build a custom `reqwest` client with SOCKS5 proxy = 127.0.0.1:9050
     let socks_proxy = reqwest::Proxy::all("socks5://127.0.0.1:9050")
         .map_err(|e| anyhow!("Failed to create SOCKS proxy: {e}"))?;
-
-    let reqwest_client = reqwest::Client::builder()
-        .proxy(socks_proxy)
-        .build()
-        .map_err(|e| anyhow!("Failed to build reqwest client: {e}"))?;
-
-    let cfg = solana_client::rpc_client::RpcClientConfig {
-        commitment_config: CommitmentConfig::confirmed(),
-        ..solana_client::rpc_client::RpcClientConfig::default()
-    };
 
     let rpc = RpcClient::new_with_commitment(
         url.to_string(),
