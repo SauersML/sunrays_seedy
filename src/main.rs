@@ -259,8 +259,9 @@ impl RpcSender for TorSender {
     
     fn get_transport_stats(&self) -> RpcTransportStats {
         RpcTransportStats {
-            request_count: self.request_id.load(Ordering::Relaxed),
+            request_count: self.request_id.load(Ordering::Relaxed) as usize,
             elapsed_time: Duration::from_secs(0),
+            rate_limited_time: Duration::from_secs(0),
         }
     }
 
