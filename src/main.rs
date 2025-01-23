@@ -152,10 +152,6 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
     config_builder
         .override_net_params()
         .insert("socks_port".to_string(), port as i32);
-    
-    config_builder
-        .transport()
-        .add_socks_port(socks_cfg);
 
     let config = config_builder
         .build()
