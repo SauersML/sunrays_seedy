@@ -616,20 +616,26 @@ async fn check_dns_leak() -> Result<()> {
         .timeout(Duration::from_secs(15))
         .build()?;
 
-    match tor_client
+    let response = match tor_client
         .get(DNS_LEAK_CHECK_URL)
         .send()
         .await
-        .and_then(|r| r.json::<serde_json::Value>())
-        .await 
     {
+        Ok(res) => res,
+        Err(e) => {
+            println!("[WARNING] DNS leak check request failed: {}", e);
+            return Ok(());
+        }
+    };
+
+    match response.json::<serde_json::Value>().await {
         Ok(json) => {
             if let Some(ip_field) = json.get("ip") {
                 match ip_field {
                     serde_json::Value::String(ips) if ips.contains(',') => {
                         println!("[WARNING] Potential DNS leak detected. Contacted IPs:");
                         ips.split(',').for_each(|ip| println!("  - {}", ip.trim()));
-                        Err(WalletError::TorVerificationFailed("DNS leak detected".into()).into())
+                        Err(WalletError::DnsLeakDetected(ips.clone()).into())
                     }
                     _ => {
                         println!("[SUCCESS] No DNS leaks detected");
@@ -642,7 +648,7 @@ async fn check_dns_leak() -> Result<()> {
             }
         }
         Err(e) => {
-            println!("[WARNING] DNS leak check failed: {}", e);
+            println!("[WARNING] Failed to parse DNS leak response: {}", e);
             Ok(())
         }
     }
