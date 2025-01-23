@@ -46,7 +46,7 @@ const SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 /// The file where we store our Argon2-encrypted private key.
 const ENCRYPTED_WALLET_FILE: &str = "wallet.enc";
 
-/// AES-GCM-SIV uses a 96-bit (12-byte) nonce.
+/// AES-256-GCM uses a 96-bit (12-byte) nonce.
 const NONCE_SIZE: usize = 12;
 
 /// 1 SOL = 1_000_000_000 lamports
