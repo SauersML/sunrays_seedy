@@ -102,18 +102,24 @@ async fn main() -> Result<()> {
 
 // =============== Tor Setup ===============
 
-/// Start an embedded Tor SOCKS proxy by executing arti binary
+/// Start an embedded Tor SOCKS proxy using arti-client's API
 async fn start_tor_proxy(port: u16) -> Result<()> {
-    use tokio::process::Command;
-    
-    // Launch arti proxy in the background
-    Command::new("arti")
-        .args(["proxy", "--log-level", "debug", "--port", &port.to_string()])
-        .spawn()
-        .map_err(|e| anyhow!("Failed to start arti proxy: {}. Is arti installed?", e))?;
+    use arti_client::{TorClient, config::{TorClientConfigBuilder}};
 
-    // Wait briefly to ensure proxy starts
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 1. Create configuration with SOCKS port
+    let mut config_builder = TorClientConfigBuilder::default();
+    
+    // Set SOCKS port through network parameters
+    config_builder.override_net_params().insert(
+        "socks_port".to_string(), 
+        port as i32
+    );
+    
+    let config = config_builder.build()
+        .map_err(|e| anyhow!("Config error: {}", e))?;
+
+    // 2. Create and bootstrap client (starts SOCKS proxy)
+    let _client = TorClient::create_bootstrapped(config).await?;
     
     Ok(())
 }
