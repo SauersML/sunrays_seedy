@@ -167,27 +167,18 @@ socks_listen = "127.0.0.1:{port}"
 [storage]
 cache_dir = "{cache}"
 state_dir = "{state}"
-"#,
-        port=port,
-        cache=cache_path.display(),
-        state=state_path.display()
-    );
+
+[logging]
+console = "debug"
+"#, port=port, cache=cache_path.display(), state=state_path.display() );
     
-    // Deserialize *directly* into a TorClientConfigBuilder (it implements Deserialize).
-    let config_builder: TorClientConfigBuilder =
-        toml::from_str(&arti_toml)
-            .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
+    let config_builder: TorClientConfigBuilder = toml::from_str(&arti_toml)
+       .map_err(|e| anyhow!("Failed to parse Arti TOML: {e}"))?;
     
-    // Now build a TorClientConfig.
-    let config = config_builder
-        .build()
-        .map_err(|e| anyhow!("Failed to build Arti config: {e}"))?;
+    let config = config_builder.build()?;
     
-    // Bootstrap with the final config.
-    if let Err(e) = TorClient::create_bootstrapped(config).await {
-        eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
-        return Err(anyhow!("Failed to start Tor client: {e}"));
-    }
+    // Actually start up Arti with that config:
+    TorClient::create_bootstrapped(config).await?;
     
     // If we got here, Tor is running on 127.0.0.1:9050
     Ok(())
