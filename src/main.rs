@@ -22,6 +22,7 @@ use solana_client::{
     rpc_request::RpcRequest,
     rpc_sender::RpcSender,
 };
+use solana_client::rpc_transport_stats::RpcTransportStats;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     signature::{Keypair, Signer},
@@ -228,7 +229,7 @@ impl RpcSender for TorSender {
                     // If we get here, there's some other problem
                     let code = resp.status();
                     let msg = format!("HTTP error status: {code}");
-                    anyhow!(msg)
+                    reqwest::Error::new(reqwest::StatusCode::INTERNAL_SERVER_ERROR, msg)
                 })
             ));
         }
@@ -254,6 +255,13 @@ impl RpcSender for TorSender {
 
         // Otherwise, parse the "result"
         Ok(json["result"].clone())
+    }
+    
+    fn get_transport_stats(&self) -> RpcTransportStats {
+        RpcTransportStats {
+            request_count: self.request_id.load(Ordering::Relaxed),
+            elapsed_time: Duration::from_secs(0),
+        }
     }
 
     fn url(&self) -> String {
