@@ -1,97 +1,86 @@
-# Tor-Enabled Solana Wallet CLI
+# Sunrays Seedy
 
-Note: this does not work, so attempt to use it at your own risk.
+A Rust CLI tool that automatically launches an **embedded Tor** client and then routes **all Solana RPC calls through Tor**. It also creates and manages an **Argon2-encrypted** Solana wallet (`wallet.enc`) with a simple command-line interface.
 
-This is a Rust program that provides a minimalistic Solana wallet over an **embedded Tor client**, so you do **not** need a separate Tor installation. All Solana RPC traffic can be routed through Tor for greater privacy.
+**Disclaimer:** This is a demo/reference project. Use at your own risk. Always exercise caution when storing private keys and sending cryptocurrency!
 
 ## Features
 
-- **No External Tor**  
-  Automatically starts a Tor SOCKS proxy via [arti-client](https://docs.rs/arti-client/latest/arti_client/).  
-- **Secure Key Storage**  
-  The wallet's private key is encrypted in `wallet.enc` using:
-  - [Argon2] password-based key derivation
-  - [AES-256-GCM-SIV] encryption
-  - Secure random salts and nonces
-  - Zeroization of in-memory secrets
-- **Convenient Commands**  
-  - `generate`: Create a new wallet
-  - `address`: Show public address
-  - `balance`: Fetch current balance
-  - `send`: Send SOL to a recipient
-  - `monitor`: Continuously watch for balance changes
+- **Embedded Tor**: No external Tor installation required; runs on `127.0.0.1:9050`.
+- **At-Rest Encryption**: Wallet keys stored in `wallet.enc` are protected with Argon2id + AES-256-GCM.
+- **Zeroize**: Passphrases and decrypted key material in memory are zeroized when possible.
+- **Simple CLI**: 
+  - `generate` creates a new wallet
+  - `address` shows public address
+  - `balance` queries your current SOL balance
+  - `send <RECIPIENT> <AMOUNT>` sends SOL
+  - `monitor` polls your balance every 30 seconds
 
-## Usage
+## How It Works
 
-After building (see below), run the binary with one of these subcommands:
+1. On each run, the program boots an **embedded Tor** process in the background, storing Tor data in `/tmp/my_tor_data`.
+2. Once Tor is bootstrapped, all subsequent Solana RPC connections go through a SOCKS5 proxy at `127.0.0.1:9050`.
+3. If you run commands like `balance` or `send`, the tool will:
+   - Prompt for your wallet passphrase
+   - Decrypt your `wallet.enc` via Argon2id (64MB memory, 3 passes) + AES-256-GCM
+   - Perform the requested Solana operation.
 
-```
-mywallet generate
-mywallet address
-mywallet balance
-mywallet send <RECIPIENT_ADDRESS> <AMOUNT_SOL>
-mywallet monitor
-mywallet help
-```
+## Installation
 
-### 1. Generate a Wallet
-```bash
-mywallet generate
-```
-This prompts for a passphrase twice, encrypts a newly generated Solana keypair, and stores it in `wallet.enc`.
-
-### 2. Show Address
-```bash
-mywallet address
-```
-Decrypts your wallet (prompts for passphrase) and prints the public Solana address.
-
-### 3. Show Balance
-```bash
-mywallet balance
-```
-Fetches your SOL balance from the Solana mainnet.
-
-### 4. Send SOL
-```bash
-mywallet send <RECIPIENT> <AMOUNT>
-```
-Example:
-```bash
-mywallet send 4yMAbzS... 0.5
-```
-Sends 0.5 SOL to `<RECIPIENT>`.
-
-### 5. Monitor Balance
-```bash
-mywallet monitor
-```
-Continuously fetches your balance every 30 seconds until you press <kbd>Ctrl+C</kbd>.
-
-### 6. Help
-```bash
-mywallet help
-```
-Prints usage instructions.
-
-## Building
-
-1. Install [Rust and Cargo](https://www.rust-lang.org/tools/install).  
-2. Clone this repository.  
-3. Run:
+1. **Prerequisites**:  
+   - [Rust](https://www.rust-lang.org/tools/install) (1.60+ recommended)
+   - A Unix-like OS is recommended (Linux / macOS). Windows is possible but has not been extensively tested.
+2. **Clone this repo**:
+   ```bash
+   git clone https://github.com/youruser/sunrays_seedy.git
+   cd sunrays_seedy
+   ```
+3. **Build**:
    ```bash
    cargo build --release
    ```
-4. The compiled binary will be at `target/release/mywallet` (Linux/macOS) or `target\release\mywallet.exe` (Windows).
+4. **Run**:
+   ```bash
+   ./target/release/sunrays_seedy help
+   ```
+   or simply:
+   ```bash
+   cargo run -- help
+   ```
 
-## Tor Proxy Note
+## Usage
 
-By default, this application starts a Tor client listening on `127.0.0.1:9050`. However, **you must make sure** that the Solana RPC traffic actually uses this SOCKS proxy. Otherwise, the traffic may go out over clearnet.
+```bash
+# Generate a new wallet (encrypted in `wallet.enc`)
+sunrays_seedy generate
 
-## Security Warnings
+# Show the address (public key)
+sunrays_seedy address
 
-- **Passphrase**: A strong passphrase is essential. If lost, the wallet cannot be recovered.  
-- **Existing Wallets**: Running `mywallet generate` overwrites the existing `wallet.enc` without warning.  
-- **Local Files**: Keep `wallet.enc` in a secure folder. Anyone who obtains it (and your passphrase) can spend your funds.  
-- **Tor Data Directory**: By default, the Tor client stores state/cache files in `/tmp/my_tor_data`.
-- **No Guarantee**: This code is a proof-of-concept which almost certainly will not work.
+# Check balance
+sunrays_seedy balance
+
+# Send funds
+sunrays_seedy send <RECIPIENT_PUBKEY> <AMOUNT_SOL>
+# Example:
+sunrays_seedy send Fg6PaFpoGXkYsidMpWTKhtTwrSdgnkXpese2Zu2R7EVk 0.01
+
+# Monitor balance (poll every 30s)
+sunrays_seedy monitor
+```
+
+### Important Notes
+
+- **Passphrase Strength**: The security of your `wallet.enc` file depends entirely on the passphrase you choose. Pick something lengthy and random if you’re storing real funds.
+- **Tor Data Directory**: The tool creates `/tmp/my_tor_data` (mode 0700). It does **not** remove or clear it on exit. If you need ephemeral usage, you can modify the code to remove it afterwards.
+- **Mainnet Only**: Currently, it’s hard-coded to `https://api.mainnet-beta.solana.com`. If you need devnet or testnet, you must adjust the code or add a CLI parameter.
+- **Port Conflicts**: By default, it starts Tor on `127.0.0.1:9050`. If you already have Tor or something else bound to that port, the program will fail to start. Edit the code or free the port to fix this.
+
+## Security Considerations
+
+- **Local Attacker Model**: If an attacker has full local admin privileges, they might capture your passphrase via keylogging or memory inspection. This is beyond the scope of normal “software-only” wallets.
+- **Argon2id Parameters**: Currently set to 64 MB memory, 3 passes. Adjust in `derive_key_from_passphrase()` if you want a lighter or heavier cost.
+- **Nonce Reuse**: Each encryption uses a fresh random nonce. Make sure you **never** reuse the same encrypted file with the same nonce. This code automatically prevents that by generating new random nonces every time you do `generate`.
+
+## Do not use this program
+It probably will not work, and has not been tested.
