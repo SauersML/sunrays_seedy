@@ -225,12 +225,8 @@ impl RpcSender for TorSender {
         // Return error if non-200
         if !resp.status().is_success() {
             return Err(SolanaClientError::from(
-                resp.error_for_status().err().unwrap_or_else(|| {
-                    // If we get here, there's some other problem
-                    let code = resp.status();
-                    let msg = format!("HTTP error status: {code}");
-                    reqwest::get(&format!("{}", code)).await.unwrap().error_for_status().unwrap_err()
-                })
+                resp.error_for_status()
+                    .expect_err("status already checked as not success")
             ));
         }
 
