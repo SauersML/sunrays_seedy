@@ -567,3 +567,86 @@ fn lamports_to_sol(lamports: u64) -> f64 {
 fn sol_to_lamports(sol: f64) -> u64 {
     (sol * LAMPORTS_PER_SOL).round() as u64
 }
+
+async fn verify_tor_connectivity() -> Result<()> {
+    let tor_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let response = tor_client
+        .get(TOR_CHECK_URL)
+        .send()
+        .await
+        .context("Failed to reach Tor check service")?
+        .text()
+        .await?;
+
+    let json: serde_json::Value = serde_json::from_str(&response)
+        .context("Invalid response from Tor check service")?;
+
+    if json["IsTor"].as_bool() != Some(true) {
+        let msg = format!("Not using Tor! IP: {}", json["IP"].as_str().unwrap_or("unknown"));
+        return Err(WalletError::TorVerificationFailed(msg).into());
+    }
+
+    println!(
+        "\n[SUCCESS] Verified Tor exit node: {}",
+        json["IP"].as_str().unwrap_or("unknown")
+    );
+    Ok(())
+}
+
+async fn check_dns_leak() -> Result<()> {
+    let tor_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let response = tor_client
+        .get(DNS_LEAK_CHECK_URL)
+        .send()
+        .await
+        .context("DNS leak check failed")?
+        .text()
+        .await?;
+
+    let json: serde_json::Value = serde_json::from_str(&response)
+        .context("Invalid DNS leak response")?;
+
+    if let Some(ips) = json["ip"].as_array() {
+        if ips.len() > 1 {
+            println!("[WARNING] Potential DNS leak detected. Contacted IPs:");
+            for ip in ips {
+                println!("  - {}", ip.as_str().unwrap_or("invalid"));
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+async fn compare_with_clear_net() -> Result<()> {
+    let tor_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    let clear_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+
+    let tor_ip = tor_client.get(IP_CHECK_URL).send().await?.text().await?;
+    let clear_ip = clear_client.get(IP_CHECK_URL).send().await?.text().await?;
+
+    println!("  Tor Network IP: {}", tor_ip);
+    println!("  Clearnet IP:    {}", clear_ip);
+
+    if tor_ip == clear_ip {
+        println!("[WARNING] Tor and clearnet IPs match - connection might not be private!");
+    } else {
+        println!("[SUCCESS] Tor IP differs from clearnet IP");
+    }
+
+    Ok(())
+}
