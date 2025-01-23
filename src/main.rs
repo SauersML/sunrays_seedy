@@ -196,8 +196,8 @@ impl TorSender {
 
 #[async_trait]
 impl RpcSender for TorSender {
-    async fn send(
-        &self,
+    async fn send<'a>(
+        &'a self,
         request: RpcRequest,
         params: serde_json::Value
     ) -> SolanaClientResult<serde_json::Value> {
