@@ -389,6 +389,10 @@ async fn send_sol_cmd(to: &str, amount_sol: f64) -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
 
+    if amount_sol <= 0.0 {
+        return Err(anyhow!("Amount must be greater than zero."));
+    }
+    
     let lamports = sol_to_lamports(amount_sol);
     let to_pubkey = to.parse().map_err(|_| anyhow!("Invalid recipient pubkey: {to}"))?;
 
