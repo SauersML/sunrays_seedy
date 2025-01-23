@@ -22,7 +22,7 @@ use solana_client::{
     rpc_request::RpcRequest,
     rpc_sender::RpcSender,
 };
-use solana_client::rpc_config::RpcTransportStats;
+use solana_client::rpc_sender::RpcTransportStats;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     signature::{Keypair, Signer},
