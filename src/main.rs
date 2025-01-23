@@ -15,6 +15,7 @@ use async_trait::async_trait;  // For RpcSender impl
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
+use arti_client::config::SocksPortConfigBuilder;
 use solana_client::{
     client_error::ClientError as SolanaClientError, client_error::Result as SolanaClientResult,
     nonblocking::rpc_client::RpcClient,
@@ -149,9 +150,12 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         .state_dir(CfgPath::new_literal(state_path));
 
     // Listen on 127.0.0.1:9050
+    let mut socks_cfg = SocksPortConfigBuilder::default();
+    socks_cfg.set_address(("127.0.0.1", port));
+    
     config_builder
-        .proxy()
-        .set_socks_listen(Some(format!("127.0.0.1:{port}").parse()?));
+        .transport()
+        .add_socks_port(socks_cfg);
 
     let config = config_builder
         .build()
