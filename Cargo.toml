@@ -19,6 +19,7 @@ aead = "0.5.2"
 async-trait = "0.1.85"
 toml = "0.8.19"
 spl-token = "7.0.0"
+borsh = "1.5.5"
 tor-rtcompat = { version = "0.26.0", features = ["tokio", "native-tls"] }
 
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros"] }
