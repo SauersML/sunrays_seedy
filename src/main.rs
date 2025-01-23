@@ -111,27 +111,40 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
     };
     use std::{fs, path::PathBuf};
 
-    // Required for runtime but not directly referenced
-    #[allow(unused_imports)]
-    use tor_rtcompat::PreferredRuntime;
-
     // Create dedicated data directory with secure permissions
     let data_dir = PathBuf::from(".tor_data");
+    
+    // Create parent directory if needed
     fs::create_dir_all(&data_dir)
         .map_err(|e| anyhow!("Failed to create Tor data directory: {}", e))?;
+
+    // Create required subdirectories
+    let cache_dir = data_dir.join("cache");
+    let state_dir = data_dir.join("state");
+    
+    fs::create_dir_all(&cache_dir)
+        .map_err(|e| anyhow!("Failed to create cache directory: {}", e))?;
+    fs::create_dir_all(&state_dir)
+        .map_err(|e| anyhow!("Failed to create state directory: {}", e))?;
 
     // Set directory permissions to 0700
     #[cfg(unix)] {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))?;
     }
 
-    // Configure custom storage locations using CfgPath
+    // Convert paths to absolute paths and create CfgPath entries
+    let cache_path = CfgPath::new_literal(fs::canonicalize(cache_dir)?);
+    let state_path = CfgPath::new_literal(fs::canonicalize(state_dir)?);
+
+    // Configure storage locations
     let mut config_builder = TorClientConfigBuilder::default();
     config_builder
         .storage()
-        .cache_dir(CfgPath::new_literal(data_dir.join("cache")))
-        .state_dir(CfgPath::new_literal(data_dir.join("state")));
+        .cache_dir(cache_path)
+        .state_dir(state_path);
 
     // Set SOCKS port through network parameters
     config_builder.override_net_params().insert(
@@ -148,6 +161,7 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
     
     Ok(())
 }
+
 
 
 
