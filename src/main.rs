@@ -182,8 +182,16 @@ state_dir = "{state}"
     let parsed_config: ArtiTomlConfig = toml::from_str(&arti_toml)
         .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
     
+    // Configure builder with our parsed TOML values
+    config_builder
+        .proxy()
+        .socks_listen(&parsed_config.proxy.socks_listen);
+    
+    // Build the actual config
+    let config = config_builder.build()?;
+    
     // Now we create_bootstrapped with that config
-    if let Err(e) = TorClient::create_bootstrapped(parsed_config).await {
+    if let Err(e) = TorClient::create_bootstrapped(config).await {
         eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
         return Err(anyhow!("Failed to start Tor client: {e}"));
     }
