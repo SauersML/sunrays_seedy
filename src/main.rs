@@ -129,13 +129,13 @@ async fn main() -> Result<()> {
 
 /// Start an embedded Tor SOCKS proxy using the `arti` CLI as a child process.
 async fn start_tor_proxy(port: u16) -> Result<Child> {
-    let mut child = StdCommand::new("arti")
+    let mut child = Command::new("arti")
         .arg("proxy")
         .arg("-p")
         .arg(format!("{}", port))
         .arg("-o")
         .arg("logging.console=info")
-        .stdout(Stdio::piped())
+        .stdout(Stdio::piped())  // async-compatible pipes
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| anyhow!("Failed to spawn `arti proxy`: {e}"))?;
