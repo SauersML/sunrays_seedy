@@ -159,12 +159,6 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
     let cache_path = data_dir.join("cache");
     let state_path = data_dir.join("state");
 
-    let mut config_builder = TorClientConfigBuilder::default();
-    config_builder
-        .storage()
-        .cache_dir(CfgPath::new_literal(cache_path))
-        .state_dir(CfgPath::new_literal(state_path));
-
     // Build an embedded TOML string so Arti actually opens a SOCKS listener.
     let arti_toml = format!(r#"
 [proxy]
@@ -179,18 +173,17 @@ state_dir = "{state}"
         state=state_path.display()
     );
     
-    let parsed_config: ArtiTomlConfig = toml::from_str(&arti_toml)
-        .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
+    // Deserialize *directly* into a TorClientConfigBuilder (it implements Deserialize).
+    let config_builder: TorClientConfigBuilder =
+        toml::from_str(&arti_toml)
+            .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
     
-    // Configure builder with our parsed TOML values
-    config_builder
-        .proxy()
-        .socks_listen(&parsed_config.proxy.socks_listen);
+    // Now build a TorClientConfig.
+    let config = config_builder
+        .build()
+        .map_err(|e| anyhow!("Failed to build Arti config: {e}"))?;
     
-    // Build the actual config
-    let config = config_builder.build()?;
-    
-    // Now we create_bootstrapped with that config
+    // Bootstrap with the final config.
     if let Err(e) = TorClient::create_bootstrapped(config).await {
         eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
         return Err(anyhow!("Failed to start Tor client: {e}"));
