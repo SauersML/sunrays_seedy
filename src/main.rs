@@ -127,59 +127,44 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Start an embedded Tor SOCKS proxy using arti-client
-async fn start_tor_proxy(port: u16) -> Result<()> {
-    let data_dir = Path::new("/tmp/my_tor_data");
-    if !data_dir.exists() {
-        fs::create_dir(data_dir).map_err(|e| anyhow!("Failed to create .tor_data folder: {e}"))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700))
-                .map_err(|e| anyhow!("Failed to set perms on .tor_data: {e}"))?;
+/// Start an embedded Tor SOCKS proxy using the `arti` CLI as a child process.
+async fn start_tor_proxy(port: u16) -> Result<Child> {
+    let mut child = Command::new("arti")
+        .arg("proxy")
+        .arg("-p")
+        .arg(format!("{}", port))
+        .arg("-o")
+        .arg("logging.console=info")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("Failed to spawn `arti proxy`: {e}"))?;
+
+    // We'll watch arti's stdout for a line mentioning "Sufficiently bootstrapped" or "Bootstrapped 100%".
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("No STDOUT from `arti` process!"))?;
+
+    let mut reader = BufReader::new(stdout).lines();
+
+    println!("[INFO] Launching `arti proxy` on 127.0.0.1:{port}...");
+    while let Some(line) = reader.next_line().await? {
+        println!("arti> {}", line);
+
+        // Arti might say "Sufficiently bootstrapped" or "Bootstrapped 100%" once it’s ready.
+        // Right now, it says "INFO arti::subcommands::proxy: Sufficiently bootstrapped; system SOCKS now functional."
+        if line.contains("Sufficiently bootstrapped") || line.contains("Bootstrapped 100%") {
+            println!("[INFO] Arti is fully bootstrapped on 127.0.0.1:{port}.");
+            break;
         }
     }
-    for sub in &["cache", "state", "keys", "persistent-state"] {
-        let sub_path = data_dir.join(sub);
-        if !sub_path.exists() {
-            fs::create_dir_all(&sub_path)
-                .map_err(|e| anyhow!("Cannot create {sub} subfolder: {e}"))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                fs::set_permissions(&sub_path, fs::Permissions::from_mode(0o700))
-                    .map_err(|e| anyhow!("Failed to set perms on {sub}: {e}"))?;
-            }
-        }
-    }
 
-    let cache_path = data_dir.join("cache");
-    let state_path = data_dir.join("state");
-
-    // Build an embedded TOML string so Arti actually opens a SOCKS listener.
-    let arti_toml = format!(r#"
-[proxy]
-socks_listen = "127.0.0.1:{port}"
-
-[storage]
-cache_dir = "{cache}"
-state_dir = "{state}"
-
-[logging]
-console = "debug"
-"#, port=port, cache=cache_path.display(), state=state_path.display() );
-    
-    let config_builder: TorClientConfigBuilder = toml::from_str(&arti_toml)
-       .map_err(|e| anyhow!("Failed to parse Arti TOML: {e}"))?;
-    
-    let config = config_builder.build()?;
-    
-    // Actually start up Arti with that config:
-    TorClient::create_bootstrapped(config).await?;
-    
-    // If we got here, Tor is running on 127.0.0.1:9050
-    Ok(())
+    // If we reach here, arti is presumably listening on `127.0.0.1:9050`.
+    // We do NOT kill the child. Return it so you can kill it later if you want.
+    Ok(child)
 }
+
 
 /// A custom `RpcSender` that routes all requests over an async `reqwest::Client` with socks5 proxy.
 struct TorSender {
