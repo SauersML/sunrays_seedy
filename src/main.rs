@@ -118,6 +118,13 @@ async fn main() -> Result<()> {
     // Spawn the `arti` CLI proxy on 127.0.0.1:9050
     let _arti_child = start_tor_proxy(9050).await?; // We store the child handle in _arti_child to keep it alive while we run. (If _arti_child goes out of scope, the child might get dropped.)
     println!("\n[INFO] Arti (Tor) is running on 127.0.0.1:9050. All Solana RPC calls will be proxied.\n");
+    
+    // Verification sequence
+    println!("\n[VERIFYING TOR CONNECTION]");
+    verify_tor_connectivity().await?;
+    check_dns_leak().await?;
+    compare_with_clear_net().await?;
+    println!();
 
     // Dispatch to the requested command
     match cmd {
