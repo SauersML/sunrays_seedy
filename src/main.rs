@@ -39,7 +39,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::time::sleep;
-use tokio::process::Command;
+use tokio::process::Command as TokioCommand;
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::Child};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
 
 /// Start an embedded Tor SOCKS proxy using the `arti` CLI as a child process.
 async fn start_tor_proxy(port: u16) -> Result<Child> {
-    let mut child = Command::new("arti")
+    let mut child = TokioCommand::new("arti")
         .arg("proxy")
         .arg("-p")
         .arg(format!("{}", port))
