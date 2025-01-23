@@ -44,8 +44,9 @@ use tokio::{io::{AsyncBufReadExt, BufReader}, process::Child};
 use zeroize::{Zeroize, Zeroizing};
 
 const TOR_CHECK_URL: &str = "https://check.torproject.org/api/ip";
-const DNS_LEAK_CHECK_URL: &str = "https://dnsleaktest.com/api/dnsleak/ip/";
+const DNS_LEAK_CHECK_URL: &str = "https://dnsleaktest.org/api/ip";
 const IP_CHECK_URL: &str = "https://api.ipify.org";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0";
 
 /// Default Solana mainnet RPC endpoint.
 const SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -108,6 +109,8 @@ enum WalletError {
     InvalidPassphrase,
     #[error("Tor verification failed: {0}")]
     TorVerificationFailed(String),
+    #[error("DNS leak detected: {0}")]
+    DnsLeakDetected(String),
 }
 
 #[tokio::main]
@@ -122,7 +125,9 @@ async fn main() -> Result<()> {
     // Verification sequence
     println!("\n[VERIFYING TOR CONNECTION]");
     verify_tor_connectivity().await?;
-    check_dns_leak().await?;
+    if let Err(e) = check_dns_leak().await {
+        eprintln!("{}", e);
+    }
     compare_with_clear_net().await?;
     println!();
 
@@ -607,39 +612,51 @@ async fn verify_tor_connectivity() -> Result<()> {
 async fn check_dns_leak() -> Result<()> {
     let tor_client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(15))
         .build()?;
 
-    let response = tor_client
+    match tor_client
         .get(DNS_LEAK_CHECK_URL)
         .send()
         .await
-        .context("DNS leak check failed")?
-        .text()
-        .await?;
-
-    let json: serde_json::Value = serde_json::from_str(&response)
-        .context("Invalid DNS leak response")?;
-
-    if let Some(ips) = json["ip"].as_array() {
-        if ips.len() > 1 {
-            println!("[WARNING] Potential DNS leak detected. Contacted IPs:");
-            for ip in ips {
-                println!("  - {}", ip.as_str().unwrap_or("invalid"));
+        .and_then(|r| r.json::<serde_json::Value>())
+        .await 
+    {
+        Ok(json) => {
+            if let Some(ip_field) = json.get("ip") {
+                match ip_field {
+                    serde_json::Value::String(ips) if ips.contains(',') => {
+                        println!("[WARNING] Potential DNS leak detected. Contacted IPs:");
+                        ips.split(',').for_each(|ip| println!("  - {}", ip.trim()));
+                        Err(WalletError::TorVerificationFailed("DNS leak detected".into()).into())
+                    }
+                    _ => {
+                        println!("[SUCCESS] No DNS leaks detected");
+                        Ok(())
+                    }
+                }
+            } else {
+                println!("[WARNING] DNS leak check returned unexpected format");
+                Ok(())
             }
         }
+        Err(e) => {
+            println!("[WARNING] DNS leak check failed: {}", e);
+            Ok(())
+        }
     }
-    
-    Ok(())
 }
 
 async fn compare_with_clear_net() -> Result<()> {
     let tor_client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(10))
         .build()?;
 
     let clear_client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
         .timeout(Duration::from_secs(10))
         .build()?;
 
