@@ -15,7 +15,6 @@ use async_trait::async_trait;  // For RpcSender impl
 use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
-use arti_client::config::SocksPortConfigBuilder;
 use solana_client::{
     client_error::ClientError as SolanaClientError, client_error::Result as SolanaClientResult,
     nonblocking::rpc_client::RpcClient,
