@@ -149,8 +149,9 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         .state_dir(CfgPath::new_literal(state_path));
 
     // Listen on 127.0.0.1:9050
-    let mut socks_cfg = SocksPortConfigBuilder::default();
-    socks_cfg.set_address(("127.0.0.1", port));
+    config_builder
+        .override_net_params()
+        .insert("socks_port".to_string(), port as i32);
     
     config_builder
         .transport()
