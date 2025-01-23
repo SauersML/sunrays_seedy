@@ -499,7 +499,7 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
 
     // Build an RpcClient using new_sender()
     let rpc_config = RpcClientConfig {
-        commitment: commitment_config::confirmed(),
+        commitment: CommitmentConfig::confirmed(),
         // Maybe: specify timeouts, etc.
         ..Default::default()
     };
