@@ -53,7 +53,7 @@ const NONCE_SIZE: usize = 12;
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
 /// A type alias for AES-256-GCM:
-type Aes256GcmSiv = Aes256Gcm;
+type Aes256GcmAlias = Aes256Gcm;
 
 /// An object stored inside `wallet.enc`:
 #[derive(Serialize, Deserialize)]
@@ -452,7 +452,7 @@ fn encrypt_keypair(keypair: &Keypair, passphrase: &Zeroizing<String>) -> Result<
     let mut nonce_bytes = vec![0u8; NONCE_SIZE];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
-    let cipher = Aes256GcmSiv::new_from_slice(&derived_key)?;
+    let cipher = Aes256GcmAlias::new_from_slice(&derived_key)?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), secret_key_bytes.as_ref())
         .map_err(|_| anyhow!("Encryption failed"))?;
@@ -494,7 +494,7 @@ fn decrypt_keypair(passphrase: &Zeroizing<String>) -> Result<Keypair> {
         return Err(WalletError::CorruptData.into());
     }
 
-    let cipher = Aes256GcmSiv::new_from_slice(&derived_key)?;
+    let cipher = Aes256GcmAlias::new_from_slice(&derived_key)?;
     let mut decrypted = cipher
         .decrypt(Nonce::from_slice(&enc.nonce), enc.ciphertext.as_ref())
         .map_err(|_| WalletError::InvalidPassphrase)?;
