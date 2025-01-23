@@ -150,8 +150,8 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
 
     // Listen on 127.0.0.1:9050
     config_builder
-        .override_net_params()
-        .insert("socks_port".to_string(), port as i32);
+        .proxy()
+        .set_socks_listen(Some(format!("127.0.0.1:{port}").parse()?));
 
     let config = config_builder
         .build()
