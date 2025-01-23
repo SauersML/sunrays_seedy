@@ -19,8 +19,7 @@ use solana_client::{
     types::client_error::{ClientError as SolanaClientError, ClientResult as SolanaClientResult},
     nonblocking::rpc_client::RpcClient,
     rpc_client::RpcClientConfig,
-    rpc_request::{RpcError, RpcRequest},
-    rpc_response::RpcSimulateTransactionResult,
+    rpc_request::RpcRequest,
     rpc_sender::RpcSender,
 };
 use solana_sdk::{
