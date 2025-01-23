@@ -179,17 +179,11 @@ state_dir = "{state}"
         state=state_path.display()
     );
     
-    let parsed_config: ArtiTomlConfig = toml::from_str(&arti_toml)
+    let parsed_config: TorConfig = toml::from_str(&arti_toml)
         .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
     
-    // Use the parsed TOML to configure the builder
-    config_builder
-        .proxy()
-        .socks_listen(&parsed_config.proxy.socks_listen);
-    let config = config_builder.build()?;
-    
-    // Now we create_bootstrapped with that config.
-    if let Err(e) = TorClient::create_bootstrapped(config).await {
+    // Now we create_bootstrapped with that config
+    if let Err(e) = TorClient::create_bootstrapped(parsed_config).await {
         eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
         return Err(anyhow!("Failed to start Tor client: {e}"));
     }
