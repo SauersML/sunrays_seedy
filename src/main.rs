@@ -148,19 +148,29 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         .cache_dir(CfgPath::new_literal(cache_path))
         .state_dir(CfgPath::new_literal(state_path));
 
-    // Listen on 127.0.0.1:9050
-    config_builder
-        .override_net_params()
-        .insert("socks_port".to_string(), port as i32);
+    // Build an embedded TOML string so Arti actually opens a SOCKS listener.
+    let arti_toml = format!(r#"
+[proxy]
+socks_listen = "127.0.0.1:{port}"
 
-    let config = config_builder
-        .build()
-        .map_err(|e| anyhow!("Failed to build Tor config: {e}"))?;
-
+[storage]
+cache_dir = "{cache}"
+state_dir = "{state}"
+"#,
+        port=port,
+        cache=cache_path.display(),
+        state=state_path.display()
+    );
+    
+    let config: arti_client::TorClientConfig = toml::from_str(&arti_toml)
+        .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
+    
+    // Now we create_bootstrapped with that config.
     if let Err(e) = TorClient::create_bootstrapped(config).await {
         eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
         return Err(anyhow!("Failed to start Tor client: {e}"));
     }
+    
     // If we got here, Tor is running on 127.0.0.1:9050
     Ok(())
 }
