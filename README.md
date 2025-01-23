@@ -86,7 +86,7 @@ Prints usage instructions.
 
 ## Tor Proxy Note
 
-By default, this application starts a Tor client listening on `127.0.0.1:9050`. However, **you must make sure ** that the Solana RPC traffic actually uses this SOCKS proxy. Otherwise, the traffic may go out over clearnet.
+By default, this application starts a Tor client listening on `127.0.0.1:9050`. However, **you must make sure** that the Solana RPC traffic actually uses this SOCKS proxy. Otherwise, the traffic may go out over clearnet.
 
 ## Security Warnings
 
