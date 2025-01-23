@@ -202,7 +202,6 @@ impl RpcSender for TorSender {
         request: RpcRequest,
         params: serde_json::Value
     ) -> SolanaClientResult<serde_json::Value> {
-        use solana_client::rpc_request::RpcError;
         // Each request increments an ID
         let request_id = self.request_id.fetch_add(1, Ordering::Relaxed);
         // Build JSON body
