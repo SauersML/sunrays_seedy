@@ -108,10 +108,9 @@ async fn main() -> Result<()> {
     // Parse the subcommand from CLI.
     let cmd = parse_command_line();
 
-    // Start an embedded Tor SOCKS proxy on 127.0.0.1:9050 using arti-client,
-    // before making any Solana RPC calls.
-    start_tor_proxy(9050).await?;
-    println!("\n[INFO] Tor is running on 127.0.0.1:9050. All Solana RPC calls will be proxied.\n");
+    // Spawn the `arti` CLI proxy on 127.0.0.1:9050
+    let _arti_child = start_tor_proxy(9050).await?; // We store the child handle in _arti_child to keep it alive while we run. (If _arti_child goes out of scope, the child might get dropped.)
+    println!("\n[INFO] Arti (Tor) is running on 127.0.0.1:9050. All Solana RPC calls will be proxied.\n");
 
     // Dispatch to the requested command
     match cmd {
