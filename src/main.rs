@@ -100,29 +100,56 @@ async fn main() -> Result<()> {
     }
 }
 
+
 // =============== Tor Setup ===============
 
 /// Start an embedded Tor SOCKS proxy using arti-client's API
 async fn start_tor_proxy(port: u16) -> Result<()> {
-    use arti_client::{TorClient, config::{TorClientConfigBuilder}};
+    use arti_client::{
+        TorClient, 
+        config::{TorClientConfigBuilder, CfgPath}
+    };
+    use std::{fs, path::PathBuf};
 
-    // 1. Create configuration with SOCKS port
+    // Required for runtime but not directly referenced
+    #[allow(unused_imports)]
+    use tor_rtcompat::PreferredRuntime;
+
+    // Create dedicated data directory with secure permissions
+    let data_dir = PathBuf::from(".tor_data");
+    fs::create_dir_all(&data_dir)
+        .map_err(|e| anyhow!("Failed to create Tor data directory: {}", e))?;
+
+    // Set directory permissions to 0700
+    #[cfg(unix)] {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
+    }
+
+    // Configure custom storage locations using CfgPath
     let mut config_builder = TorClientConfigBuilder::default();
-    
+    config_builder
+        .storage()
+        .cache_dir(CfgPath::new_literal(data_dir.join("cache")))
+        .state_dir(CfgPath::new_literal(data_dir.join("state")));
+
     // Set SOCKS port through network parameters
     config_builder.override_net_params().insert(
         "socks_port".to_string(), 
         port as i32
     );
-    
-    let config = config_builder.build()
-        .map_err(|e| anyhow!("Config error: {}", e))?;
 
-    // 2. Create and bootstrap client (starts SOCKS proxy)
-    let _client = TorClient::create_bootstrapped(config).await?;
+    let config = config_builder.build()
+        .map_err(|e| anyhow!("Failed to build Tor config: {}", e))?;
+
+    // Create and bootstrap client (starts SOCKS proxy)
+    let _client = TorClient::create_bootstrapped(config).await
+        .map_err(|e| anyhow!("Failed to start Tor client: {}", e))?;
     
     Ok(())
 }
+
+
 
 // =============== CLI Parsing ===============
 
