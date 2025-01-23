@@ -179,7 +179,7 @@ state_dir = "{state}"
         state=state_path.display()
     );
     
-    let parsed_config: TorConfig = toml::from_str(&arti_toml)
+    let parsed_config: ArtiTomlConfig = toml::from_str(&arti_toml)
         .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
     
     // Now we create_bootstrapped with that config
