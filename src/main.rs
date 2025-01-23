@@ -127,11 +127,6 @@ async fn main() -> Result<()> {
 
 /// Start an embedded Tor SOCKS proxy using arti-client
 async fn start_tor_proxy(port: u16) -> Result<()> {
-    use arti_client::{
-        config::{TorClientConfigBuilder, CfgPath},
-        TorClient,
-    };
-
     let data_dir = Path::new("/tmp/my_tor_data");
     if !data_dir.exists() {
         fs::create_dir(data_dir).map_err(|e| anyhow!("Failed to create .tor_data folder: {e}"))?;
