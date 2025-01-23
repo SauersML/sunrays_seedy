@@ -52,18 +52,18 @@ A Rust CLI tool that automatically launches an **embedded Tor** client and then 
 
 ```bash
 # Generate a new wallet (encrypted in `wallet.enc`)
-./target/release/sunrays_seedy/sunrays_seedy generate
+./target/release/sunrays_seedy generate
 
 # Show the address (public key)
-./target/release/sunrays_seedy/sunrays_seedy address
+./target/release/sunrays_seedy address
 
 # Check balance
-./target/release/sunrays_seedy/sunrays_seedy balance
+./target/release/sunrays_seedy balance
 
 # Send funds
-./target/release/sunrays_seedy/sunrays_seedy send <RECIPIENT_PUBKEY> <AMOUNT_SOL>
+./target/release/sunrays_seedy send <RECIPIENT_PUBKEY> <AMOUNT_SOL>
 # Example:
-./target/release/sunrays_seedy/sunrays_seedy send Fg6PaFpoGXkYsidMpWTKhtTwrSdgnkXpese2Zu2R7EVk 0.01
+./target/release/sunrays_seedy send Fg6PaFpoGXkYsidMpWTKhtTwrSdgnkXpese2Zu2R7EVk 0.01
 
 # Monitor balance (poll every 30s)
 ./target/release/sunrays_seedy/sunrays_seedy monitor
