@@ -30,7 +30,7 @@ use solana_sdk::{
 };
 use std::{
     fs::{self, read, write},
-    process::{Command, Stdio},
+    process::{Command as StdCommand, Stdio},
     io::{BufRead, Write as IoWrite},
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
