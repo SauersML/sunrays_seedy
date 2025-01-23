@@ -766,7 +766,7 @@ async fn compare_with_clear_net() -> Result<()> {
 
 
 /// Helper function: enumerates all nonzero SPL token accounts for `owner`.
-/// Returns a Vec of SplTokenBalance structs (mint, decimals, ui_amount, etc).
+/// Returns a Vec of SplTokenBalance structs (mint, ui_amount, etc).
 async fn fetch_spl_token_balances(
     rpc_client: &RpcClient,
     owner: &Pubkey,
@@ -805,7 +805,6 @@ async fn fetch_spl_token_balances(
                 mint: mint_pubkey,
                 symbol_guess,
                 ui_amount,
-                decimals,
             });
         }
     }
