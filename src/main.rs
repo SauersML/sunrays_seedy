@@ -63,6 +63,23 @@ struct EncryptedKey {
     ciphertext: Vec<u8>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ArtiTomlConfig {
+    proxy: ArtiProxyConfig,
+    storage: ArtiStorageConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtiProxyConfig {
+    socks_listen: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtiStorageConfig {
+    cache_dir: String,
+    state_dir: String,
+}
+
 /// CLI commands
 enum Command {
     Generate,
@@ -162,8 +179,14 @@ state_dir = "{state}"
         state=state_path.display()
     );
     
-    let config: arti_client::TorClientConfig = toml::from_str(&arti_toml)
+    let parsed_config: ArtiTomlConfig = toml::from_str(&arti_toml)
         .map_err(|e| anyhow!("Failed to parse embedded Arti TOML: {e}"))?;
+    
+    // Use the parsed TOML to configure the builder
+    config_builder
+        .proxy()
+        .socks_listen(&parsed_config.proxy.socks_listen);
+    let config = config_builder.build()?;
     
     // Now we create_bootstrapped with that config.
     if let Err(e) = TorClient::create_bootstrapped(config).await {
