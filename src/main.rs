@@ -16,13 +16,13 @@ use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
 use solana_client::{
-    types::client_error::{ClientError as SolanaClientError, ClientResult as SolanaClientResult},
+    client_error::Error as SolanaClientError, client_error::Result as SolanaClientResult,
     nonblocking::rpc_client::RpcClient,
     rpc_client::RpcClientConfig,
     rpc_request::RpcRequest,
     rpc_sender::RpcSender,
 };
-use solana_client::rpc_transport_stats::RpcTransportStats;
+use solana_client::rpc_config::RpcTransportStats;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     signature::{Keypair, Signer},
@@ -229,7 +229,7 @@ impl RpcSender for TorSender {
                     // If we get here, there's some other problem
                     let code = resp.status();
                     let msg = format!("HTTP error status: {code}");
-                    reqwest::Error::new(reqwest::StatusCode::INTERNAL_SERVER_ERROR, msg)
+                    reqwest::Error::new_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
                 })
             ));
         }
