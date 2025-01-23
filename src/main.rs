@@ -176,7 +176,7 @@ impl TorSender {
     /// Create a new TorSender with a reqwest::Client that uses socks5h proxy
     fn new(url: String) -> Result<Self> {
         // Configure socks5h for remote DNS resolution
-        let proxy = reqwest::Proxy::all("socks5://127.0.0.1:9050")
+        let proxy = reqwest::Proxy::all("socks5h://127.0.0.1:9050")
             .map_err(|e| anyhow!("Failed to create Tor proxy: {e}"))?;
 
         // Build an async reqwest client
