@@ -29,7 +29,7 @@ use solana_sdk::{
     system_transaction,
 };
 use std::{
-    fs::{self, read, write},
+    fs::{read, write},
     process::Stdio,
     io::{BufRead, Write as IoWrite},
     path::Path,
@@ -69,23 +69,6 @@ struct EncryptedKey {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ArtiTomlConfig {
-    proxy: ArtiProxyConfig,
-    storage: ArtiStorageConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct ArtiProxyConfig {
-    socks_listen: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ArtiStorageConfig {
-    cache_dir: String,
-    state_dir: String,
 }
 
 /// CLI commands
