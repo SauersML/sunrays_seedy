@@ -17,6 +17,7 @@ zeroize = "1.8"
 aes-gcm = "0.10.3"
 aead = "0.5.2"
 async-trait = "0.1.85"
+toml = "0.8.19"
 tor-rtcompat = { version = "0.26.0", features = ["tokio", "native-tls"] }
 
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros"] }
