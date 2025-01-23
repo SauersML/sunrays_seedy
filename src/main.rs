@@ -105,63 +105,57 @@ async fn main() -> Result<()> {
 
 /// Start an embedded Tor SOCKS proxy using arti-client's API
 async fn start_tor_proxy(port: u16) -> Result<()> {
-    use arti_client::{
-        TorClient, 
-        config::{TorClientConfigBuilder, CfgPath}
-    };
+    use arti_client::{TorClient, config::{TorClientConfigBuilder, CfgPath}};
     use std::{fs, path::PathBuf};
+    use std::os::unix::fs::PermissionsExt;  // Required for from_mode()
 
-    // Create dedicated data directory with secure permissions
+    // Create dedicated data directory structure
     let data_dir = PathBuf::from(".tor_data");
     
-    // Create parent directory if needed
-    fs::create_dir_all(&data_dir)
-        .map_err(|e| anyhow!("Failed to create Tor data directory: {}", e))?;
+    // Clean previous attempts and create fresh directories
+    let _ = fs::remove_dir_all(&data_dir);
+    let dirs = ["cache", "state", "keys", "persistent-state"];
+    for subdir in &dirs {
+        let path = data_dir.join(subdir);
+        fs::create_dir_all(&path)
+            .map_err(|e| anyhow!("Failed to create {}: {}", path.display(), e))?;
 
-    // Create required subdirectories
-    let cache_dir = data_dir.join("cache");
-    let state_dir = data_dir.join("state");
-    
-    fs::create_dir_all(&cache_dir)
-        .map_err(|e| anyhow!("Failed to create cache directory: {}", e))?;
-    fs::create_dir_all(&state_dir)
-        .map_err(|e| anyhow!("Failed to create state directory: {}", e))?;
-
-    // Set directory permissions to 0700
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
-        fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o700))?;
-        fs::set_permissions(&state_dir, fs::Permissions::from_mode(0o700))?;
+        // Set secure permissions on Unix systems
+        #[cfg(unix)] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .map_err(|e| anyhow!("Failed to set permissions for {}: {}", path.display(), e))?;
+        }
     }
 
-    // Convert paths to absolute paths and create CfgPath entries
-    let cache_path = CfgPath::new_literal(fs::canonicalize(cache_dir)?);
-    let state_path = CfgPath::new_literal(fs::canonicalize(state_dir)?);
+    // Build canonical paths for Tor configuration
+    let cache_path = data_dir.canonicalize()?.join("cache");
+    let state_path = data_dir.canonicalize()?.join("state");
 
-    // Configure storage locations
+    // Configure Tor client with explicit paths and network settings
     let mut config_builder = TorClientConfigBuilder::default();
     config_builder
         .storage()
-        .cache_dir(cache_path)
-        .state_dir(state_path);
-
-    // Set SOCKS port through network parameters
-    config_builder.override_net_params().insert(
-        "socks_port".to_string(), 
-        port as i32
-    );
+        .cache_dir(CfgPath::new_literal(cache_path))
+        .state_dir(CfgPath::new_literal(state_path));
+    
+    // Set SOCKS port parameter
+    config_builder
+        .override_net_params()
+        .insert("socks_port".to_string(), port as i32);
 
     let config = config_builder.build()
         .map_err(|e| anyhow!("Failed to build Tor config: {}", e))?;
 
-    // Create and bootstrap client (starts SOCKS proxy)
-    let _client = TorClient::create_bootstrapped(config).await
-        .map_err(|e| anyhow!("Failed to start Tor client: {}", e))?;
-    
+    // Create and bootstrap Tor client with timeout
+    let _client = TorClient::create_bootstrapped(config)
+        .await
+        .map_err(|e| {
+            eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
+            anyhow!("Failed to start Tor client: {}", e)
+        })?;
+
     Ok(())
 }
-
 
 
 
