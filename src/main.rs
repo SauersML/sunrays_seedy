@@ -2,6 +2,8 @@
 //! generates an encrypted Solana wallet, and provides CLI commands: generate, address,
 //! balance, send, and monitor. All requests go over Tor. No external Tor install needed.
 
+#![forbid(unsafe_code)]
+
 use anyhow::{anyhow, Context, Result};
 use argon2::Argon2;
 use aes_gcm::{
@@ -15,15 +17,13 @@ use solana_client::nonblocking::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::signature::{Keypair, Signer};
 use solana_sdk::system_transaction;
-use std::fs::{read, write};
+use std::fs::{self, read, write};
 use std::io::Write as IoWrite;
 use std::path::Path;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::time::sleep;
 use zeroize::Zeroize;
-
-// =============== Constants ===============
 
 /// Default Solana mainnet RPC endpoint.
 const SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
@@ -37,12 +37,10 @@ const NONCE_SIZE: usize = 12;
 /// 1 SOL = 1_000_000_000 lamports
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
-// We define a concrete type alias for AES-256-GCM-SIV:
+/// We define a concrete type alias for AES-256-GCM-SIV:
 type Aes256GcmSiv = Aes256Gcm;
 
-// =============== Data Structures ===============
-
-/// Stored inside `wallet.enc`, containing:
+/// An object stored inside `wallet.enc`:
 ///   - Argon2 salt
 ///   - AES-GCM-SIV nonce
 ///   - Ciphertext of the 64-byte Keypair (secret key)
@@ -74,16 +72,14 @@ enum WalletError {
     InvalidPassphrase,
 }
 
-// =============== Main Entry ===============
-
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Parse the subcommand from CLI
+    // Parse the subcommand from CLI.
     let cmd = parse_command_line();
 
     // Start an embedded Tor SOCKS proxy on 127.0.0.1:9050 using arti-client.
-    // We'll do this BEFORE any Solana RPC calls, so they're guaranteed to go over Tor.
-    let _tor_client = start_tor_proxy(9050).await?;
+    // Do this BEFORE any Solana RPC calls so everything goes over Tor.
+    start_tor_proxy(9050).await?;
     println!("\n[INFO] Tor is running on 127.0.0.1:9050. All Solana RPC calls go through it.\n");
 
     // Dispatch to the requested command
@@ -100,67 +96,78 @@ async fn main() -> Result<()> {
     }
 }
 
-
-// =============== Tor Setup ===============
-
-/// Start an embedded Tor SOCKS proxy using arti-client's API
+/// Start an embedded Tor SOCKS proxy using arti-client
 async fn start_tor_proxy(port: u16) -> Result<()> {
-    use arti_client::{TorClient, config::{TorClientConfigBuilder, CfgPath}};
-    use std::{fs, path::PathBuf};
-    use std::os::unix::fs::PermissionsExt;  // Required for from_mode()
+    use arti_client::{
+        config::{TorClientConfigBuilder, CfgPath},
+        TorClient,
+    };
 
-    // Create dedicated data directory structure
-    let data_dir = PathBuf::from(".tor_data");
-    
-    // Clean previous attempts and create fresh directories
-    let _ = fs::remove_dir_all(&data_dir);
-    let dirs = ["cache", "state", "keys", "persistent-state"];
-    for subdir in &dirs {
-        let path = data_dir.join(subdir);
-        fs::create_dir_all(&path)
-            .map_err(|e| anyhow!("Failed to create {}: {}", path.display(), e))?;
+    // We'll keep our Tor data in a ".tor_data" subdirectory.  This should have
+    // normal (700) permissions so Tor can read/write what it needs.
+    let data_dir = Path::new(".tor_data");
 
-        // Set secure permissions on Unix systems
-        #[cfg(unix)] {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                .map_err(|e| anyhow!("Failed to set permissions for {}: {}", path.display(), e))?;
+    // 1) Create .tor_data if it doesn’t exist yet
+    if !data_dir.exists() {
+        fs::create_dir(data_dir)
+            .map_err(|e| anyhow!("Failed to create .tor_data folder: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(data_dir, fs::Permissions::from_mode(0o700))
+                .map_err(|e| anyhow!("Failed to set perms on .tor_data: {e}"))?;
         }
     }
 
-    // Build canonical paths for Tor configuration
-    let cache_path = data_dir.canonicalize()?.join("cache");
-    let state_path = data_dir.canonicalize()?.join("state");
+    // 2) Create subfolders. We don't remove them or purge them if they exist:
+    //    that would slow Tor's subsequent usage by discarding cached descriptors.
+    for sub in &["cache", "state", "keys", "persistent-state"] {
+        let sub_path = data_dir.join(sub);
+        if !sub_path.exists() {
+            fs::create_dir_all(&sub_path)
+                .map_err(|e| anyhow!("Cannot create {sub} subfolder: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&sub_path, fs::Permissions::from_mode(0o700))
+                    .map_err(|e| anyhow!("Failed to set perms on {sub} subfolder: {e}"))?;
+            }
+        }
+    }
 
-    // Configure Tor client with explicit paths and network settings
+    // 3) Build config. Importantly, we do NOT call .canonicalize() on the path,
+    //    to avoid Arti complaining about your parent dir permissions:
+    let cache_path = data_dir.join("cache");
+    let state_path = data_dir.join("state");
+
     let mut config_builder = TorClientConfigBuilder::default();
     config_builder
         .storage()
         .cache_dir(CfgPath::new_literal(cache_path))
         .state_dir(CfgPath::new_literal(state_path));
-    
-    // Set SOCKS port parameter
+
+    // We'll override the default socks_port to the user-provided port.
+    // But note that for an embedded client, it's not strictly necessary to
+    // open a public listening socket. Some internal Arti usage can be ephemeral.
     config_builder
         .override_net_params()
         .insert("socks_port".to_string(), port as i32);
 
-    let config = config_builder.build()
-        .map_err(|e| anyhow!("Failed to build Tor config: {}", e))?;
+    let config = config_builder
+        .build()
+        .map_err(|e| anyhow!("Failed to build Tor config: {e}"))?;
 
-    // Create and bootstrap Tor client with timeout
-    let _client = TorClient::create_bootstrapped(config)
-        .await
-        .map_err(|e| {
-            eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
-            anyhow!("Failed to start Tor client: {}", e)
-        })?;
+    // 4) Create and bootstrap Tor client with a short timeout
+    if let Err(e) = TorClient::create_bootstrapped(config).await {
+        eprintln!("[TOR BOOTSTRAP FAILURE] {:#?}", e);
+        return Err(anyhow!("Failed to start Tor client: {e}"));
+    }
 
+    // If we got here, Tor should be successfully running on 127.0.0.1:9050
     Ok(())
 }
 
-
-
-// =============== CLI Parsing ===============
-
+/// Parse command line arguments into a Command
 fn parse_command_line() -> Command {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -197,12 +204,13 @@ fn parse_command_line() -> Command {
     }
 }
 
+/// Print usage help
 fn print_help() {
     let exe = std::env::args()
         .next()
         .unwrap_or_else(|| "sunrays_seedy".to_string());
     println!(
-        r#"Usage:
+r#"Usage:
   {exe} generate                Generate a new wallet (encrypted) in wallet.enc
   {exe} address                 Show the public address of your wallet
   {exe} balance                 Show the current balance of your wallet
@@ -218,12 +226,9 @@ Examples:
   {exe} monitor
 
 All Solana RPC requests go over an embedded Tor SOCKS proxy on 127.0.0.1:9050.
-No external Tor install is needed.
-"#
+No external Tor install is needed."#
     );
 }
-
-// =============== Commands ===============
 
 /// (1) Generate a new Keypair, (2) Prompt passphrase, (3) Encrypt to `wallet.enc`
 async fn generate_wallet() -> Result<()> {
@@ -303,8 +308,6 @@ async fn monitor_balance() -> Result<()> {
     }
 }
 
-// =============== Wallet Encryption/Decryption ===============
-
 /// Prompt for passphrase twice
 fn prompt_passphrase_twice() -> Result<String> {
     loop {
@@ -344,7 +347,8 @@ fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
     // 4) Encrypt with AES256-GCM-SIV
-    let cipher = Aes256GcmSiv::new_from_slice(&derived_key).map_err(|_| anyhow!("Invalid key length"))?;
+    let cipher = Aes256GcmSiv::new_from_slice(&derived_key)
+        .map_err(|_| anyhow!("Invalid key length"))?;
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), secret_key_bytes.as_ref())
         .map_err(|_| anyhow!("Encryption failed"))?;
@@ -354,7 +358,6 @@ fn encrypt_keypair(keypair: &Keypair, passphrase: &str) -> Result<()> {
         nonce: nonce_bytes,
         ciphertext,
     };
-
     let serialized = bincode::serialize(&enc)
         .map_err(|e| anyhow!("Serialization error: {e}"))?;
 
@@ -368,7 +371,7 @@ fn load_decrypt_keypair() -> Result<Keypair> {
         return Err(WalletError::WalletNotFound.into());
     }
 
-    println!("Enter wallet passphrase:");
+    print!("Enter wallet passphrase: ");
     std::io::stdout().flush()?;
     let passphrase = read_password().context("Failed to read passphrase")?;
     if passphrase.is_empty() {
@@ -381,15 +384,16 @@ fn load_decrypt_keypair() -> Result<Keypair> {
 /// Actually decrypt the file
 fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
     let file_data = read(ENCRYPTED_WALLET_FILE)?;
-    let enc: EncryptedKey = bincode::deserialize(&file_data)
-        .map_err(|_| WalletError::CorruptData)?;
+    let enc: EncryptedKey =
+        bincode::deserialize(&file_data).map_err(|_| WalletError::CorruptData)?;
 
     let derived_key = derive_key_from_passphrase(passphrase, &enc.salt)?;
     if enc.nonce.len() != NONCE_SIZE {
         return Err(WalletError::CorruptData.into());
     }
 
-    let cipher = Aes256GcmSiv::new_from_slice(&derived_key).map_err(|_| anyhow!("Invalid key length"))?;
+    let cipher = Aes256GcmSiv::new_from_slice(&derived_key)
+        .map_err(|_| anyhow!("Invalid key length"))?;
     let mut decrypted = cipher
         .decrypt(Nonce::from_slice(&enc.nonce), enc.ciphertext.as_ref())
         .map_err(|_| WalletError::InvalidPassphrase)?;
@@ -399,8 +403,8 @@ fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
         return Err(WalletError::CorruptData.into());
     }
 
-    let keypair = Keypair::from_bytes(&decrypted)
-        .map_err(|_| WalletError::CorruptData)?;
+    let keypair =
+        Keypair::from_bytes(&decrypted).map_err(|_| WalletError::CorruptData)?;
 
     // zeroize sensitive data
     decrypted.zeroize();
@@ -411,15 +415,12 @@ fn decrypt_keypair(passphrase: &str) -> Result<Keypair> {
 fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
     let mut key = [0u8; 32];
     let argon2 = Argon2::default();
-
     argon2
         .hash_password_into(passphrase.as_bytes(), salt, &mut key)
         .map_err(|e| anyhow!("Argon2 derivation failed: {e}"))?;
 
     Ok(key)
 }
-
-// =============== File Security ===============
 
 /// Restrict file permissions on Unix (chmod 600).
 #[allow(unused_variables)]
@@ -435,18 +436,11 @@ fn secure_file_permissions(path: &str) -> Result<()> {
     Ok(())
 }
 
-// =============== Solana RPC over Tor ===============
-
 /// Create a Solana RPC client that uses the local Tor SOCKS proxy
 async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
-    let rpc = RpcClient::new_with_commitment(
-        url.to_string(),
-        CommitmentConfig::confirmed(),
-    );
+    let rpc = RpcClient::new_with_commitment(url.to_string(), CommitmentConfig::confirmed());
     Ok(rpc)
 }
-
-// =============== Helper Conversions ===============
 
 fn lamports_to_sol(lamports: u64) -> f64 {
     lamports as f64 / LAMPORTS_PER_SOL
