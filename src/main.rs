@@ -16,7 +16,7 @@ use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
 use solana_client::{
-    client_error::Error as SolanaClientError, client_error::Result as SolanaClientResult,
+    nonblocking::rpc_client::ClientError as SolanaClientError, nonblocking::rpc_client::ClientResult as SolanaClientResult,
     nonblocking::rpc_client::RpcClient,
     rpc_client::RpcClientConfig,
     rpc_request::RpcRequest,
