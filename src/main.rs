@@ -244,13 +244,16 @@ impl RpcSender for TorSender {
             let code = json["error"]["code"].as_i64().unwrap_or(-1);
             let message = json["error"]["message"].as_str().unwrap_or("unknown").to_string();
 
-            // Some errors have "data" we can parse, e.g. preflight sim results
-            // Minimally, let's just bubble up
-            return Err(SolanaClientError::RpcError(RpcError::RpcResponseError {
-                code,
-                message,
-                data: solana_client::rpc_request::RpcResponseErrorData::Empty,
-            }));
+            return Err(SolanaClientError::new_with_request(
+                solana_client::client_error::ClientErrorKind::RpcError(
+                    solana_client::rpc_request::RpcError::RpcResponseError {
+                        code,
+                        message,
+                        data: solana_client::rpc_request::RpcResponseErrorData::Empty,
+                    }
+                ),
+                request
+            ));
         }
 
         // Otherwise, parse the "result"
