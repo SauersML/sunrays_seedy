@@ -229,7 +229,7 @@ impl RpcSender for TorSender {
                     // If we get here, there's some other problem
                     let code = resp.status();
                     let msg = format!("HTTP error status: {code}");
-                    reqwest::StatusCode::INTERNAL_SERVER_ERROR.into()
+                    reqwest::Error::new(reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16() as _)
                 })
             ));
         }
