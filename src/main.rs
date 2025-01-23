@@ -43,6 +43,10 @@ use tokio::process::Command as TokioCommand;
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::Child};
 use zeroize::{Zeroize, Zeroizing};
 
+const TOR_CHECK_URL: &str = "https://check.torproject.org/api/ip";
+const DNS_LEAK_CHECK_URL: &str = "https://dnsleaktest.com/api/dnsleak/ip/";
+const IP_CHECK_URL: &str = "https://api.ipify.org";
+
 /// Default Solana mainnet RPC endpoint.
 const SOLANA_RPC_URL: &str = "https://api.mainnet-beta.solana.com";
 
@@ -102,6 +106,8 @@ enum WalletError {
     CorruptData,
     #[error("Invalid passphrase.")]
     InvalidPassphrase,
+    #[error("Tor verification failed: {0}")]
+    TorVerificationFailed(String),
 }
 
 #[tokio::main]
