@@ -28,6 +28,7 @@ use solana_sdk::{
     signature::{Keypair, Signer},
     system_transaction,
 };
+use solana_program_pack::Pack;
 use std::{
     fs::{read, write},
     process::Stdio,
@@ -37,8 +38,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use borsh::BorshDeserialize;
-use spl_token::state::{Account as SplTokenAccount, Mint as SplTokenMint};
+use spl_token::state::Mint as SplMint;
 use solana_sdk::pubkey::Pubkey;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -97,6 +97,14 @@ enum WalletError {
     TorVerificationFailed(String),
     #[error("DNS leak detected: {0}")]
     DnsLeakDetected(String),
+}
+
+/// A simple struct to hold each SPL token's info
+#[derive(Debug)]
+struct SplTokenBalance {
+    mint: Pubkey,
+    symbol_guess: String,
+    ui_amount: f64,
 }
 
 #[tokio::main]
@@ -378,14 +386,62 @@ async fn show_address() -> Result<()> {
     Ok(())
 }
 
-/// Decrypt wallet and show balance
+/// Decrypt wallet and show balance (SOL + SPL tokens + approximate USD).
 async fn show_balance() -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
+    let pubkey = keypair.pubkey();
 
-    let lamports = rpc_client.get_balance(&keypair.pubkey()).await?;
-    let sol = lamports_to_sol(lamports);
-    println!("\nBalance of {}: {} SOL\n", keypair.pubkey(), sol);
+    // 1) Fetch SOL balance
+    let lamports = rpc_client.get_balance(&pubkey).await?;
+    let sol_balance = lamports_to_sol(lamports);
+
+    // 2) Fetch SOL->USD price from CoinGecko
+    let sol_usd_price = match fetch_sol_usd_price_via_coingecko_tor().await {
+        Ok(price) => price,
+        Err(e) => {
+            eprintln!("[WARNING] Failed to fetch SOL->USD price: {e}");
+            0.0
+        }
+    };
+
+    // 3) Get SPL token balances
+    let token_balances = fetch_spl_token_balances(&rpc_client, &pubkey).await?;
+
+    // 4) Print overview
+    println!("\nBalance for wallet {}:", pubkey);
+    println!("  - SOL balance: {:.6} SOL", sol_balance);
+    if sol_usd_price > 0.0 {
+        println!("  - Approx SOL price: ${:.4}", sol_usd_price);
+        println!("  - Approx total SOL in USD: ${:.4}\n", sol_balance * sol_usd_price);
+    } else {
+        println!("  - (No SOL→USD price data)\n");
+    }
+
+    if token_balances.is_empty() {
+        println!("You have no SPL tokens with a nonzero balance.\n");
+        return Ok(());
+    }
+
+    println!("SPL Token Balances:");
+    println!("--------------------------------------------");
+    for tok in token_balances {
+        // Attempt to fetch token's USD price from coingecko
+        let maybe_token_usd = fetch_token_price_via_coingecko_tor(&tok.mint, &tok.symbol_guess).await?;
+        let price_str = if let Some(usd_each) = maybe_token_usd {
+            let total_val = usd_each * tok.ui_amount;
+            format!("${:.6} each | ${:.6} total", usd_each, total_val)
+        } else {
+            "No price data".to_string()
+        };
+
+        println!(
+            "Mint: {} | Symbol guess: {} | Balance: {:.6} | {}",
+            tok.mint, tok.symbol_guess, tok.ui_amount, price_str
+        );
+    }
+    println!("--------------------------------------------\n");
+
     Ok(())
 }
 
@@ -411,20 +467,61 @@ async fn send_sol_cmd(to: &str, amount_sol: f64) -> Result<()> {
     Ok(())
 }
 
-/// Decrypt wallet, monitor balance
+/// Decrypt wallet, then continuously monitor SOL + SPL token balances + approximate USD
 async fn monitor_balance() -> Result<()> {
     let keypair = load_decrypt_keypair()?;
     let rpc_client = create_tor_rpc_client(SOLANA_RPC_URL).await?;
     let pubkey = keypair.pubkey();
 
-    println!("\nMonitoring balance of {pubkey} (Ctrl+C to stop)\n");
+    println!("\nMonitoring all balances for {pubkey} (Ctrl+C to stop)\n");
+
     loop {
         let lamports = rpc_client.get_balance(&pubkey).await?;
-        let sol = lamports_to_sol(lamports);
-        println!("Balance: {sol} SOL");
+        let sol_balance = lamports_to_sol(lamports);
+
+        let sol_usd_price = match fetch_sol_usd_price_via_coingecko_tor().await {
+            Ok(price) => price,
+            Err(e) => {
+                eprintln!("[WARNING] Failed to fetch SOL->USD price: {e}");
+                0.0
+            }
+        };
+
+        let token_balances = fetch_spl_token_balances(&rpc_client, &pubkey).await?;
+
+        println!("-------------------------------------------------");
+        println!("SOL balance: {:.6} SOL", sol_balance);
+        if sol_usd_price > 0.0 {
+            println!("(Approx: ${:.4} per SOL => ${:.4} total)", sol_usd_price, sol_balance * sol_usd_price);
+        } else {
+            println!("(No SOL→USD price data)");
+        }
+
+        if token_balances.is_empty() {
+            println!("No SPL tokens with nonzero balances.");
+        } else {
+            println!("\nSPL Token Balances:");
+            for tok in &token_balances {
+                let maybe_token_usd = fetch_token_price_via_coingecko_tor(&tok.mint, &tok.symbol_guess).await?;
+                let price_str = if let Some(usd_each) = maybe_token_usd {
+                    let total_val = usd_each * tok.ui_amount;
+                    format!("${:.6} each | ${:.6} total", usd_each, total_val)
+                } else {
+                    "No price data".to_string()
+                };
+
+                println!(
+                    "  Mint: {} | Symbol guess: {} | Bal: {:.6} | {}",
+                    tok.mint, tok.symbol_guess, tok.ui_amount, price_str
+                );
+            }
+        }
+        println!("-------------------------------------------------\n");
+
         sleep(Duration::from_secs(30)).await;
     }
 }
+
 
 /// Prompt for passphrase twice, returning a Zeroizing<String>
 fn prompt_passphrase_twice() -> Result<Zeroizing<String>> {
@@ -665,4 +762,119 @@ async fn compare_with_clear_net() -> Result<()> {
     }
 
     Ok(())
+}
+
+
+/// Helper function: enumerates all nonzero SPL token accounts for `owner`.
+/// Returns a Vec of SplTokenBalance structs (mint, decimals, ui_amount, etc).
+async fn fetch_spl_token_balances(
+    rpc_client: &RpcClient,
+    owner: &Pubkey,
+) -> Result<Vec<SplTokenBalance>> {
+    use solana_client::rpc_request::TokenAccountsFilter;
+    use spl_token::state::Account as TokenAccountState;
+
+    // 1) get all accounts owned by this user under the SPL token program
+    let token_accounts = rpc_client
+        .get_token_accounts_by_owner(owner, TokenAccountsFilter::ProgramId(spl_token::id()))
+        .await?;
+
+    let mut result = Vec::new();
+
+    for keyed_account in token_accounts {
+        // decode the UiAccountData to raw bytes
+        if let Some(raw_bytes) = keyed_account.account.data.decode() {
+            let parsed_acc = match TokenAccountState::unpack(&raw_bytes) {
+                Ok(acc) => acc,
+                Err(_) => continue,
+            };
+    
+            if parsed_acc.amount == 0 {
+                continue;
+            }
+            let mint_pubkey = parsed_acc.mint;
+    
+            let decimals = match fetch_mint_decimals(rpc_client, &mint_pubkey).await {
+                Ok(d) => d,
+                Err(_) => 0,
+            };
+            let ui_amount = parsed_acc.amount as f64 / 10_f64.powi(decimals as i32);
+            let symbol_guess = format!("{}..", &mint_pubkey.to_string()[0..6]);
+    
+            result.push(SplTokenBalance {
+                mint: mint_pubkey,
+                symbol_guess,
+                ui_amount,
+                decimals,
+            });
+        }
+    }
+    
+    Ok(result)
+}
+
+/// Helper: read the decimals field from a Mint account
+async fn fetch_mint_decimals(rpc_client: &RpcClient, mint: &Pubkey) -> Result<u8> {
+    let mint_account = rpc_client.get_account(mint).await?;
+    let mint_data = mint_account.data;
+    let parsed_mint = SplMint::unpack(&mint_data)?;
+    Ok(parsed_mint.decimals)
+}
+
+/// Try to fetch the SOL→USD price from CoinGecko using Tor
+async fn fetch_sol_usd_price_via_coingecko_tor() -> Result<f64> {
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let url = "https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd";
+    let resp = client.get(url).send().await?;
+    let json_val: serde_json::Value = resp.json().await?;
+
+    let price = json_val["solana"]["usd"]
+        .as_f64()
+        .ok_or_else(|| anyhow!("Could not parse SOL->USD price from CoinGecko"))?;
+
+    Ok(price)
+}
+
+/// Attempt to fetch an SPL token's price in USD from CoinGecko, if recognized
+/// by your local "mint -> coingecko ID" map. Return Some(price) or None if unrecognized.
+async fn fetch_token_price_via_coingecko_tor(mint: &Pubkey, symbol_guess: &str) -> Result<Option<f64>> {
+    // Minimal known mapping: BAD: THIS MUST BE FIXED
+    let coingecko_id = match mint.to_string().as_str() {
+        // Example: USDC mainnet
+        "Es9vMFrzaCERcDm2vyYP74Nb5EhyRkXyFZ6tMjVwDESu" => "usd-coin",
+        // Example: USDT mainnet
+        "BXTfzenx4NH6cYZngdU8Q9Ze2fTyoAspS93p8zmBZgr3" => "tether",
+        // etc. Must automatically include ALL tokens
+        _ => {
+            // Try symbol guess if it has "USDC" or "USDT" etc.
+            let guess_upper = symbol_guess.to_uppercase();
+            if guess_upper.contains("USDC") {
+                "usd-coin"
+            } else if guess_upper.contains("USDT") {
+                "tether"
+            } else {
+                return Ok(None); // not recognized
+            }
+        }
+    };
+
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let url = format!(
+        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
+        coingecko_id
+    );
+    let resp = client.get(&url).send().await?;
+    let json_val: serde_json::Value = resp.json().await?;
+
+    // e.g. { "usd-coin": { "usd": 1.0 } }
+    let maybe_price = json_val[coingecko_id]["usd"].as_f64();
+    Ok(maybe_price)
 }
