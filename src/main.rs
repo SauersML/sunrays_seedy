@@ -52,7 +52,7 @@ const NONCE_SIZE: usize = 12;
 /// 1 SOL = 1_000_000_000 lamports
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
-/// A type alias for AES-256-GCM-SIV:
+/// A type alias for AES-256-GCM:
 type Aes256GcmSiv = Aes256Gcm;
 
 /// An object stored inside `wallet.enc`:
