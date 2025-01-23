@@ -2,10 +2,6 @@
 //! generates an encrypted Solana wallet, and provides CLI commands: generate, address,
 //! balance, send, and monitor. All requests go over Tor by configuring a SOCKS5 proxy
 //! internally. No external Tor install needed.
-//!
-//! WARNING: While this code attempts to route all network requests through Tor, also make sure your
-//! environment doesn't leak DNS or other non-HTTP requests. This code is a demonstration of using
-//! `arti-client` plus `reqwest` with a SOCKS5 proxy.
 
 #![forbid(unsafe_code)]
 
@@ -19,12 +15,9 @@ use rand::RngCore;
 use rpassword::read_password;
 use serde::{Deserialize, Serialize};
 use solana_client::{
-    nonblocking::{
-        http_sender::HttpSender,
-        rpc_client::RpcClient,
-    },
-    // We may need this instead:
-    // nonblocking::rpc_client::RpcClient,
+    nonblocking::rpc_client::RpcClient,
+    rpc_sender::{HttpSender, RpcSender},
+    rpc_client::RpcClientConfig,
 };
 use solana_sdk::{
     commitment_config::CommitmentConfig,
@@ -53,7 +46,7 @@ const NONCE_SIZE: usize = 12;
 /// 1 SOL = 1_000_000_000 lamports
 const LAMPORTS_PER_SOL: f64 = 1_000_000_000.0;
 
-/// We define a concrete type alias for AES-256-GCM-SIV:
+/// Concrete type alias for AES-256-GCM-SIV:
 type Aes256GcmSiv = Aes256Gcm;
 
 /// An object stored inside `wallet.enc`:
@@ -113,14 +106,14 @@ async fn main() -> Result<()> {
 }
 
 /// Start an embedded Tor SOCKS proxy using arti-client, binding to 127.0.0.1:<port>.
-/// This must remain alive throughout the process (hence we do NOT drop the returned TorClient).
+/// We keep the TorClient alive by returning an Ok(()) only if it bootstraps successfully.
 async fn start_tor_proxy(port: u16) -> Result<()> {
     use arti_client::{
         config::{TorClientConfigBuilder, CfgPath},
         TorClient,
     };
 
-    // This should have normal (700) permissions so Tor can read/write what it needs.
+    // This directory should have normal (700) permissions so Tor can read/write what it needs.
     let data_dir = Path::new("/tmp/my_tor_data");
 
     // 1) Create /tmp/my_tor_data if it doesn’t exist yet
@@ -136,7 +129,7 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
     }
 
     // 2) Create subfolders. We don't remove them or purge them if they exist:
-    //    that would slow Tor's subsequent usage by discarding cached descriptors.
+    //    that would slow subsequent usage by discarding cached descriptors.
     for sub in &["cache", "state", "keys", "persistent-state"] {
         let sub_path = data_dir.join(sub);
         if !sub_path.exists() {
@@ -163,7 +156,7 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         .state_dir(CfgPath::new_literal(state_path));
 
     // We override the default socks_port to the user-provided port, e.g. 9050.
-    // This starts a listening Tor SOCKS instance.
+    // This starts a listening Tor SOCKS instance on 127.0.0.1:9050.
     config_builder
         .override_net_params()
         .insert("socks_port".to_string(), port as i32);
@@ -173,11 +166,10 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         .map_err(|e| anyhow!("Failed to build Tor config: {e}"))?;
 
     // 4) Create and bootstrap Tor client with a short timeout
-    //    (We hold onto it so it stays alive and doesn't drop.)
     let tor_client = TorClient::create_bootstrapped(config).await;
     match tor_client {
         Ok(_client) => {
-            // If we got here, Tor should be successfully running on 127.0.0.1:9050.
+            // If we got here, Tor should be running on 127.0.0.1:<port>.
             Ok(())
         }
         Err(e) => {
@@ -246,7 +238,8 @@ Examples:
   {exe} monitor
 
 All Solana RPC requests are routed through an embedded Tor SOCKS proxy on 127.0.0.1:9050.
-No external Tor installation is required."#
+No external Tor installation is required.
+"#
     );
 }
 
@@ -488,10 +481,11 @@ fn secure_file_permissions(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Create a Solana RPC client that uses the local Tor proxy (socks5h://127.0.0.1:9050).
+/// Create a Solana RPC client that uses the local Tor proxy (socks5h://127.0.0.1:9050) by wrapping
+/// reqwest calls in an HttpSender, then building an RpcClient with `new_sender()`.
 async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
     // We'll explicitly set the proxy in a custom reqwest::Client, ensuring DNS is done over Tor.
-    let socks5_proxy_url = "socks5h://127.0.0.1:9050"; // "socks5h" for remote DNS resolution
+    let socks5_proxy_url = "socks5h://127.0.0.1:9050"; // "socks5h" -> do remote DNS via Tor
     let proxy = reqwest::Proxy::all(socks5_proxy_url)
         .context("Failed to create Tor proxy configuration")?;
 
@@ -500,11 +494,18 @@ async fn create_tor_rpc_client(url: &str) -> Result<RpcClient> {
         .build()
         .context("Failed to build reqwest client for Tor")?;
 
+    // Construct an HttpSender with custom Reqwest client
     let http_sender = HttpSender::with_client(url.to_string(), reqwest_client);
-    let commitment_config = CommitmentConfig::confirmed();
 
-    // Construct RpcClient with a custom sender to ensure Tor usage.
-    Ok(RpcClient::new_with_commitment_sender(http_sender, commitment_config))
+    // Build an RpcClient using new_sender()
+    let rpc_config = RpcClientConfig {
+        commitment: CommitmentConfig::confirmed(),
+        // Maybe: specify timeouts, etc.
+        ..Default::default()
+    };
+    let rpc_client = RpcClient::new_sender(http_sender, rpc_config);
+
+    Ok(rpc_client)
 }
 
 fn lamports_to_sol(lamports: u64) -> f64 {
