@@ -103,9 +103,8 @@ async fn start_tor_proxy(port: u16) -> Result<()> {
         TorClient,
     };
 
-    // We'll keep our Tor data in a ".tor_data" subdirectory.  This should have
-    // normal (700) permissions so Tor can read/write what it needs.
-    let data_dir = Path::new(".tor_data");
+    // This should have normal (700) permissions so Tor can read/write what it needs.
+    let data_dir = Path::new("/tmp/my_tor_data");
 
     // 1) Create .tor_data if it doesn’t exist yet
     if !data_dir.exists() {
