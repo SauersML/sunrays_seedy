@@ -29,9 +29,6 @@ use solana_sdk::{
     system_transaction,
 };
 use solana_program_pack::Pack;
-use solscan_api::solscan::SolscanAPI;
-use solscan_api::structs::token::Token as SolscanToken;
-use solscan_api::structs::token_market_item::TokenMarketItem;
 use std::{
     fs::{read, write},
     process::Stdio,
@@ -108,7 +105,6 @@ struct SplTokenBalance {
     mint: Pubkey,
     symbol_guess: String,
     ui_amount: f64,
-    price_usd: f64, // 0.0 if unknown
 }
 
 #[tokio::main]
@@ -410,7 +406,7 @@ async fn show_balance() -> Result<()> {
     };
 
     // 3) Get SPL token balances
-    let token_balances = fetch_spl_token_balances_solscan(&pubkey).await?;
+    let token_balances = fetch_spl_token_balances(&rpc_client, &pubkey).await?;
 
     // 4) Print overview
     println!("\nBalance for wallet {}:", pubkey);
@@ -430,19 +426,20 @@ async fn show_balance() -> Result<()> {
     println!("SPL Token Balances:");
     println!("--------------------------------------------");
     for tok in token_balances {
-        let total_val = tok.ui_amount * tok.price_usd;
-        let price_str = if tok.price_usd > 0.0 {
-            format!("${:.6} each | ${:.6} total", tok.price_usd, total_val)
+        // Attempt to fetch token's USD price from coingecko
+        let maybe_token_usd = fetch_token_price_via_coingecko_tor(&tok.mint, &tok.symbol_guess).await?;
+        let price_str = if let Some(usd_each) = maybe_token_usd {
+            let total_val = usd_each * tok.ui_amount;
+            format!("${:.6} each | ${:.6} total", usd_each, total_val)
         } else {
             "No price data".to_string()
         };
-    
+
         println!(
             "Mint: {} | Symbol guess: {} | Balance: {:.6} | {}",
             tok.mint, tok.symbol_guess, tok.ui_amount, price_str
         );
     }
-
     println!("--------------------------------------------\n");
 
     Ok(())
@@ -490,7 +487,7 @@ async fn monitor_balance() -> Result<()> {
             }
         };
 
-        let token_balances = fetch_spl_token_balances_solscan(&pubkey).await?;
+        let token_balances = fetch_spl_token_balances(&rpc_client, &pubkey).await?;
 
         println!("-------------------------------------------------");
         println!("SOL balance: {:.6} SOL", sol_balance);
@@ -505,9 +502,10 @@ async fn monitor_balance() -> Result<()> {
         } else {
             println!("\nSPL Token Balances:");
             for tok in &token_balances {
-                let total_val = tok.ui_amount * tok.price_usd;
-                let price_str = if tok.price_usd > 0.0 {
-                    format!("${:.6} each | ${:.6} total", tok.price_usd, total_val)
+                let maybe_token_usd = fetch_token_price_via_coingecko_tor(&tok.mint, &tok.symbol_guess).await?;
+                let price_str = if let Some(usd_each) = maybe_token_usd {
+                    let total_val = usd_each * tok.ui_amount;
+                    format!("${:.6} each | ${:.6} total", usd_each, total_val)
                 } else {
                     "No price data".to_string()
                 };
@@ -767,71 +765,60 @@ async fn compare_with_clear_net() -> Result<()> {
 }
 
 
-/// Fetch all SPL tokens from Solscan (non-SOL) plus market data for each one.
-/// Then return them in a custom SplTokenBalance struct, including approximate USD price.
-async fn fetch_spl_token_balances_solscan(
-    wallet_address: &Pubkey,
+/// Helper function: enumerates all nonzero SPL token accounts for `owner`.
+/// Returns a Vec of SplTokenBalance structs (mint, ui_amount, etc).
+async fn fetch_spl_token_balances(
+    rpc_client: &RpcClient,
+    owner: &Pubkey,
 ) -> Result<Vec<SplTokenBalance>> {
-    // 1) Create a new SolscanAPI client
-    let solscan_api = SolscanAPI::new();
+    use solana_client::rpc_request::TokenAccountsFilter;
+    use spl_token::state::Account as TokenAccountState;
 
-    // 2) Get all tokens for this wallet
-    let tokens: Vec<SolscanToken> = solscan_api
-        .get_account_tokens(&wallet_address.to_string())
-        .await
-        .map_err(|e| anyhow!("Solscan get_account_tokens failed: {:?}", e))?;
+    // 1) get all accounts owned by this user under the SPL token program
+    let token_accounts = rpc_client
+        .get_token_accounts_by_owner(owner, TokenAccountsFilter::ProgramId(spl_token::id()))
+        .await?;
 
-    let mut results = Vec::new();
+    let mut result = Vec::new();
 
-    for t in tokens {
-        // If there's no balance or it's zero, skip
-        if t.token_amount
-            .as_ref()
-            .and_then(|amt| amt.ui_amount)
-            .unwrap_or(0.0)
-            == 0.0
-        {
-            continue;
-        }
-
-        // Attempt to parse the token_address into a Pubkey
-        let mint_pubkey = match t.token_address.as_ref().map(|s| s.parse::<Pubkey>()) {
-            Some(Ok(pk)) => pk,
-            _ => {
-                // skip if missing or parse fails
+    for keyed_account in token_accounts {
+        // decode the UiAccountData to raw bytes
+        if let Some(raw_bytes) = keyed_account.account.data.decode() {
+            let parsed_acc = match TokenAccountState::unpack(&raw_bytes) {
+                Ok(acc) => acc,
+                Err(_) => continue,
+            };
+    
+            if parsed_acc.amount == 0 {
                 continue;
             }
-        };
-
-        // Derive a "symbol_guess" either from Solscan’s token_symbol or part of the address
-        let symbol_guess = t.token_symbol.clone().unwrap_or_else(|| {
-            let partial = t.token_address
-                .as_ref()
-                .map(|addr| addr.get(..6).unwrap_or(""))
-                .unwrap_or("");
-            format!("{}..", partial)
-        });
-
-        // We'll do a separate Solscan call to get the market data
-        let maybe_price_usd = fetch_token_price_via_solscan(&solscan_api, &t).await?;
-
-        // Build the final result item
-        results.push(SplTokenBalance {
-            mint: mint_pubkey,
-            symbol_guess,
-            ui_amount: t.token_amount
-                .as_ref()
-                .and_then(|amt| amt.ui_amount)
-                .unwrap_or(0.0),
-            // We'll store the approximate USD price if found, else 0.0
-            price_usd: maybe_price_usd,
-        });
+            let mint_pubkey = parsed_acc.mint;
+    
+            let decimals = match fetch_mint_decimals(rpc_client, &mint_pubkey).await {
+                Ok(d) => d,
+                Err(_) => 0,
+            };
+            let ui_amount = parsed_acc.amount as f64 / 10_f64.powi(decimals as i32);
+            let symbol_guess = format!("{}..", &mint_pubkey.to_string()[0..6]);
+    
+            result.push(SplTokenBalance {
+                mint: mint_pubkey,
+                symbol_guess,
+                ui_amount,
+            });
+        }
     }
-
-    Ok(results)
+    
+    Ok(result)
 }
 
-
+/// Helper: read the decimals field from a Mint account
+async fn fetch_mint_decimals(rpc_client: &RpcClient, mint: &Pubkey) -> Result<u8> {
+    let mint_account = rpc_client.get_account(mint).await?;
+    let mint_data = mint_account.data;
+    let parsed_mint = SplMint::unpack(&mint_data)?;
+    Ok(parsed_mint.decimals)
+}
 
 /// Try to fetch the SOL→USD price from CoinGecko using Tor
 async fn fetch_sol_usd_price_via_coingecko_tor() -> Result<f64> {
@@ -851,22 +838,42 @@ async fn fetch_sol_usd_price_via_coingecko_tor() -> Result<f64> {
     Ok(price)
 }
 
-/// Use Solscan's "get_market_token" endpoint to fetch approximate USD price
-/// If the token is unknown to Solscan, we return Ok(None).
-async fn fetch_token_price_via_solscan(
-    solscan_api: &SolscanAPI,
-    token: &SolscanToken,
-) -> Result<f64> {
-    // Try market data
-    match solscan_api.get_market_token(token.token_address.as_deref().unwrap_or("")).await {
-        Ok(TokenMarketItem { price_usdt, .. }) => {
-            // Some tokens might have no price on Solscan => price_usdt = 0.0
-            let price = price_usdt;
-            Ok(price)
+/// Attempt to fetch an SPL token's price in USD from CoinGecko, if recognized
+/// by your local "mint -> coingecko ID" map. Return Some(price) or None if unrecognized.
+async fn fetch_token_price_via_coingecko_tor(mint: &Pubkey, symbol_guess: &str) -> Result<Option<f64>> {
+    // Minimal known mapping: BAD: THIS MUST BE FIXED
+    let coingecko_id = match mint.to_string().as_str() {
+        // Example: USDC mainnet
+        "Es9vMFrzaCERcDm2vyYP74Nb5EhyRkXyFZ6tMjVwDESu" => "usd-coin",
+        // Example: USDT mainnet
+        "BXTfzenx4NH6cYZngdU8Q9Ze2fTyoAspS93p8zmBZgr3" => "tether",
+        // etc. Must automatically include ALL tokens
+        _ => {
+            // Try symbol guess if it has "USDC" or "USDT" etc.
+            let guess_upper = symbol_guess.to_uppercase();
+            if guess_upper.contains("USDC") {
+                "usd-coin"
+            } else if guess_upper.contains("USDT") {
+                "tether"
+            } else {
+                return Ok(None); // not recognized
+            }
         }
-        Err(e) => {
-            println!("No market data for token {:?}: {:?}", token.token_address, e);
-            Ok(0.0)
-        }
-    }
+    };
+
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("socks5h://127.0.0.1:9050")?)
+        .timeout(Duration::from_secs(15))
+        .build()?;
+
+    let url = format!(
+        "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=usd",
+        coingecko_id
+    );
+    let resp = client.get(&url).send().await?;
+    let json_val: serde_json::Value = resp.json().await?;
+
+    // e.g. { "usd-coin": { "usd": 1.0 } }
+    let maybe_price = json_val[coingecko_id]["usd"].as_f64();
+    Ok(maybe_price)
 }
