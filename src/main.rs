@@ -785,9 +785,16 @@ async fn fetch_spl_token_balances_solscan(
 
     for t in tokens {
         // If there's no balance or it's zero, skip
-        if t.token_amount.as_ref().map_or(0.0, |amt| amt.ui_amount) == 0.0 {
+        if t.token_amount
+            .as_ref()
+            .and_then(|amt| amt.ui_amount)
+            .unwrap_or(0.0)
+            == 0.0
+        {
             continue;
         }
+
+        // Attempt to parse the token_address into a Pubkey
         let mint_pubkey = match t.token_address.as_ref().map(|s| s.parse::<Pubkey>()) {
             Some(Ok(pk)) => pk,
             _ => {
@@ -795,9 +802,9 @@ async fn fetch_spl_token_balances_solscan(
                 continue;
             }
         };
-        // "symbol_guess" can come from the token's "symbol" from Solscan
+
+        // Derive a "symbol_guess" either from Solscan’s token_symbol or part of the address
         let symbol_guess = t.token_symbol.clone().unwrap_or_else(|| {
-            // fallback to a partial mint
             let partial = t.token_address
                 .as_ref()
                 .map(|addr| addr.get(..6).unwrap_or(""))
@@ -808,10 +815,14 @@ async fn fetch_spl_token_balances_solscan(
         // We'll do a separate Solscan call to get the market data
         let maybe_price_usd = fetch_token_price_via_solscan(&solscan_api, &t).await?;
 
+        // Build the final result item
         results.push(SplTokenBalance {
             mint: mint_pubkey,
             symbol_guess,
-            ui_amount: t.token_amount.as_ref().map_or(0.0, |amt| amt.ui_amount),
+            ui_amount: t.token_amount
+                .as_ref()
+                .and_then(|amt| amt.ui_amount)
+                .unwrap_or(0.0),
             // We'll store the approximate USD price if found, else 0.0
             price_usd: maybe_price_usd,
         });
@@ -819,6 +830,7 @@ async fn fetch_spl_token_balances_solscan(
 
     Ok(results)
 }
+
 
 /// Helper: read the decimals field from a Mint account
 async fn fetch_mint_decimals(rpc_client: &RpcClient, mint: &Pubkey) -> Result<u8> {
@@ -862,10 +874,6 @@ async fn fetch_token_price_via_solscan(
         Err(e) => {
             println!("No market data for token {:?}: {:?}", token.token_address, e);
             Ok(0.0)
-        }
-        Err(e) => {
-            // Some other error
-            Err(anyhow!("Solscan get_market_token error: {:?}", e))
         }
     }
 }
