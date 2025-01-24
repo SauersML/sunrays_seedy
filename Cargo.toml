@@ -20,6 +20,7 @@ async-trait = "0.1.85"
 toml = "0.8.19"
 spl-token = "7.0.0"
 solana-program-pack = "2.1.10"
+solscan-api = "0.1.2"
 tor-rtcompat = { version = "0.26.0", features = ["tokio", "native-tls"] }
 
 tokio = { version = "1.43", features = ["rt-multi-thread", "macros"] }
