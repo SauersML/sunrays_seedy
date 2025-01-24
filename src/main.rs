@@ -832,13 +832,6 @@ async fn fetch_spl_token_balances_solscan(
 }
 
 
-/// Helper: read the decimals field from a Mint account
-async fn fetch_mint_decimals(rpc_client: &RpcClient, mint: &Pubkey) -> Result<u8> {
-    let mint_account = rpc_client.get_account(mint).await?;
-    let mint_data = mint_account.data;
-    let parsed_mint = SplMint::unpack(&mint_data)?;
-    Ok(parsed_mint.decimals)
-}
 
 /// Try to fetch the SOL→USD price from CoinGecko using Tor
 async fn fetch_sol_usd_price_via_coingecko_tor() -> Result<f64> {
