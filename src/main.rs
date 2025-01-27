@@ -45,6 +45,7 @@ use tokio::time::sleep;
 use tokio::process::Command as TokioCommand;
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::Child};
 use zeroize::{Zeroize, Zeroizing};
+use bs58;
 
 const TOR_CHECK_URL: &str = "https://check.torproject.org/api/ip";
 const DNS_LEAK_CHECK_URL: &str = "https://dnsleaktest.org/api/ip";
@@ -82,6 +83,7 @@ enum Command {
     Send { to: String, amount: f64 },
     Monitor,
     Help,
+    Export,
 }
 
 /// Custom wallet-related errors
@@ -132,6 +134,7 @@ async fn main() -> Result<()> {
         Command::Balance => show_balance().await,
         Command::Send { to, amount } => send_sol_cmd(&to, amount).await,
         Command::Monitor => monitor_balance().await,
+        Command::Export => export().await,
         Command::Help => {
             print_help();
             Ok(())
@@ -293,6 +296,7 @@ fn parse_command_line() -> Command {
         "generate" => Command::Generate,
         "address" => Command::Address,
         "balance" => Command::Balance,
+        "export" => Command::Export,
         "send" => {
             if args.len() < 4 {
                 eprintln!("Usage: {} send <RECIPIENT_PUBKEY> <AMOUNT_SOL>", args[0]);
@@ -331,6 +335,7 @@ r#"Usage:
   {exe} send <RECIPIENT> <AMT>  Send <AMT> SOL to <RECIPIENT>
   {exe} monitor                 Continuously monitor wallet balance (Ctrl+C to stop)
   {exe} help                    Show this help message
+  {exe} export                  Print a NAME and PRIVATE KEY (Base58)
 
 Examples:
   {exe} generate
@@ -338,6 +343,7 @@ Examples:
   {exe} balance
   {exe} send Fg6PaFpo... 0.001
   {exe} monitor
+  {exe} export
 
 All Solana RPC requests are routed through an embedded Tor SOCKS proxy on 127.0.0.1:9050.
 No external Tor installation is required."#
@@ -876,4 +882,25 @@ async fn fetch_token_price_via_coingecko_tor(mint: &Pubkey, symbol_guess: &str) 
     // e.g. { "usd-coin": { "usd": 1.0 } }
     let maybe_price = json_val[coingecko_id]["usd"].as_f64();
     Ok(maybe_price)
+}
+
+
+async fn export() -> Result<()> {
+    // 1) Decrypt existing wallet
+    let keypair = load_decrypt_keypair()?;
+
+    // 2) Convert the raw 64 bytes to base58
+    let secret_bytes = keypair.to_bytes(); // 64 bytes
+    let private_key_base58 = bs58::encode(secret_bytes).into_string();
+
+    // 3) "NAME" can be anything you like:
+    let wallet_name = "My Wallet";
+
+    // 4) Print it out so user can copy-paste
+    println!("\n=== Import Info ===");
+    println!("Wallet Name: {wallet_name}");
+    println!("Private Key (Base58): {private_key_base58}");
+    println!("\n[CAUTION] Anyone with this base58 key can steal your funds!\n");
+
+    Ok(())
 }
