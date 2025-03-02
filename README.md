@@ -27,6 +27,10 @@ A Rust CLI tool that automatically launches an **embedded Tor** client and then 
 
 ## Installation
 
+```cargo install sunrays_seedy```
+
+_Or:_
+
 1. **Prerequisites**:  
    - [Rust](https://www.rust-lang.org/tools/install) (1.60+ recommended)
    - A Unix-like OS is recommended (Linux / macOS). Windows is possible but has not been extensively tested.
