@@ -2,7 +2,7 @@
 
 A Rust CLI tool that automatically launches an **embedded Tor** client and then routes **all Solana RPC calls through Tor**. It also creates and manages an **Argon2-encrypted** Solana wallet (`wallet.enc`) with a simple command-line interface.
 
-**Disclaimer:** This is a demo/reference project. Use at your own risk. Always exercise caution when storing private keys and sending cryptocurrency!
+**Disclaimer:** This is an experimental demo/reference project. Use at your own risk. Always exercise caution when storing private keys and sending cryptocurrency!
 
 ## Features
 
