@@ -27,7 +27,9 @@ A Rust CLI tool that automatically launches an **embedded Tor** client and then 
 
 ## Installation
 
-```cargo install sunrays_seedy```
+```
+cargo install sunrays_seedy
+```
 
 _Or:_
 
