@@ -2,6 +2,9 @@
 name = "sunrays_seedy"
 version = "0.1.0"
 edition = "2021"
+description = "An experimental CLI for a local wallet, with an embedded Tor client for Solana RPC calls."
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"
